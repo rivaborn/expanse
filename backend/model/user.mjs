@@ -152,26 +152,136 @@ class User {
 		const latest_fn = (listing.length != 0 ? listing[0].name : null);
 		this.category_sync_info[category][`latest_fn_${type}`] = latest_fn;
 	}
+	async fetch_upvoted_page({before, after}, limit) {
+		// Manual page fetch to avoid snoowrap adding huge count values that trigger upstream 500s.
+		const qs = { raw_json: 1, limit };
+		(before ? qs.before = before : null);
+		(after ? qs.after = after : null);
+
+		const res = await this.requester.oauthRequest({
+			uri: `user/${this.username}/upvoted`,
+			qs
+		});
+
+		if (Array.isArray(res)) {
+			return res;
+		}
+
+		class SubmissionStub {
+			constructor(data) { Object.assign(this, data); }
+		}
+		class CommentStub {
+			constructor(data) { Object.assign(this, data); }
+		}
+
+		const children = res?.data?.children ?? res?.children ?? [];
+		if (children.length === 0) {
+			try {
+				console.log(`upvoted empty page qs=${JSON.stringify(qs)} keys=${Object.keys(res ?? {}).join("|")}`);
+			} catch (err) {
+				console.log(`upvoted empty page qs=${JSON.stringify(qs)} (resp keys unavailable)`);
+			}
+		}
+
+		return children.map(({kind, data}) => {
+			switch (kind) {
+				case "t3":
+					return new SubmissionStub({
+						id: data.id,
+						name: data.name,
+						title: data.title,
+						body: data.selftext || "",
+						author: { name: data.author },
+						subreddit_name_prefixed: data.subreddit_name_prefixed,
+						permalink: data.permalink,
+						created_utc: data.created_utc
+					});
+				case "t1":
+					return new CommentStub({
+						id: data.id,
+						name: data.name,
+						body: data.body,
+						title: data.link_title || "",
+						author: { name: data.author },
+						subreddit_name_prefixed: data.subreddit_name_prefixed,
+						permalink: data.permalink,
+						created_utc: data.created_utc
+					});
+				default:
+					return null;
+			}
+		}).filter(Boolean);
+	}
 	async sync_category(category, type) {
+		// Pull history in small bounded chunks to avoid huge upstream queries.
+		const PAGE_LIMIT = 20;
+		const MAX_FETCH = 100;
+
+		if (category === "upvoted") {
+			let after = undefined;
+			const new_items = [];
+
+			while (new_items.length < MAX_FETCH) {
+				try {
+					const page = await this.fetch_upvoted_page({ before: undefined, after }, PAGE_LIMIT);
+					console.log(`upvoted page after=${after ?? "none"} len=${page.length}`);
+					if (page.length === 0) {
+						break;
+					}
+
+					new_items.push(...page);
+					after = page[page.length - 1].name;
+				} catch (err) {
+					// If Reddit returns 500 mid-walk, stop early to avoid hammering and rely on next sync.
+					err.extras = { category, type, after };
+					logger.error(err);
+					break;
+				}
+			}
+
+			if (new_items.length > 0) {
+				new_items.sort((a, b) => b.created_utc - a.created_utc);
+				this.parse_listing(new_items, category, type);
+				this.category_sync_info[category].latest_new_data_epoch = utils.now_epoch();
+			} else {
+				await this.replace_latest_fn(category, type);
+			}
+			return;
+		}
+
 		const options = {
-			limit: 5,
+			limit: PAGE_LIMIT,
 			before: this.category_sync_info[category][`latest_fn_${type}`] // "before" is actually chronologically after. https://www.reddit.com/dev/api/#listings
 		};
 		const listing = await this.get_listing(options, category, type);
 
-		if (listing.isFinished) {
-			if (listing.length == 0) { // either listing actually has no items, or user deleted the latest_fn item from the listing on reddit (like, deleted it from reddit ON reddit, not deleted it from reddit on expanse)
-				await this.replace_latest_fn(category, type);
-			} else {
-				this.parse_listing(listing, category, type);
-				this.category_sync_info[category].latest_new_data_epoch = utils.now_epoch();
-			}
-		} else {
-			const extended_listing = await listing.fetchAll({
-				append: true
+		let parsed_any = false;
+		if (listing.length > 0) {
+			this.parse_listing(listing, category, type);
+			parsed_any = true;
+		}
+
+		let collected = listing.length;
+		while (!listing.isFinished && collected < MAX_FETCH) {
+			const to_fetch = Math.min(PAGE_LIMIT, MAX_FETCH - collected);
+			const prev_len = listing.length;
+			const more = await listing.fetchMore({
+				append: true,
+				amount: to_fetch
 			});
-			this.parse_listing(extended_listing, category, type);
+			const new_items = more.slice(prev_len);
+			if (new_items.length > 0) {
+				this.parse_listing(new_items, category, type);
+				parsed_any = true;
+			}
+			collected = listing.length;
+		}
+
+		if (parsed_any) {
 			this.category_sync_info[category].latest_new_data_epoch = utils.now_epoch();
+		} else {
+			// Either nothing in listing or user deleted the latest_fn item; refresh pointer.
+			await this.replace_latest_fn(category, type);
 		}
 	}
 	async import_category(category, type) {
