@@ -6,6 +6,8 @@ services:
         image: docker.io/postgres:14
         networks:
             - net
+        ports:
+            - "5432:5432"
         env_file:
             - ./backend/.env_dev
         restart: "no"
