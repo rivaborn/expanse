@@ -490,9 +490,6 @@
 				{/each}
 			</select>
 			<button on:click={switch_view_user} class="btn btn-sm btn-primary" disabled={!selected_user || selected_user === view_username}>switch</button>
-			{#if !auth_username}
-				<a href="{globals_r.backend}/login" rel="external" class="btn btn-sm btn-outline-light ml-2">log in</a>
-			{/if}
 		</div>
 	{/if}
 	<span>viewing: <b>u/{view_username}</b>{#if !is_own_data} <small class="text-muted">(read-only)</small>{/if}</span>

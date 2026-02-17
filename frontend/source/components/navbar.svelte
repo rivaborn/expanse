@@ -302,10 +302,6 @@
 				</div>
 			</div>
 		</span>
-	{:else if show_data_anchors !== undefined}
-		<span class="float-right">
-			<a href="{globals_r.backend}/login" rel="external" class="btn btn-sm btn-outline-light">log in</a>
-		</span>
 	{/if}
 	<div class="clearfix"></div>
 </nav>
