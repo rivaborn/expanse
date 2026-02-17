@@ -7,10 +7,10 @@
 	import * as svelte from "svelte";
 	import axios from "axios";
 
-	let auth_username = null;
-	let view_username = null;
-	let available_users = [];
-	let online_users = [];
+	let _auth_username = null;
+	let _view_username = null;
+	let _available_users = [];
+	let _online_users = [];
 
 	const globals_r = globals.readonly;
 
@@ -23,10 +23,10 @@
 			const auth_data = auth_response.data;
 			const users_data = users_response.data;
 
-			auth_username = auth_data.username || null;
-			view_username = auth_username;
-			available_users = users_data.usernames || [];
-			online_users = users_data.online_usernames || [];
+			_auth_username = auth_data.username || null;
+			_view_username = _auth_username;
+			_available_users = users_data.usernames || [];
+			_online_users = users_data.online_usernames || [];
 
 			return {
 				status: 200,
@@ -53,6 +53,10 @@
 	export let use_page;
 
 	let active_page = null;
+	let auth_username = _auth_username;
+	let view_username = _view_username;
+	let available_users = _available_users;
+	let online_users = _online_users;
 
 	function handle_component_dispatch(evt) {
 		switch (evt.detail.action || evt.detail) {

@@ -11,22 +11,22 @@ async function init_db() {
 	try {
 		await client.query("begin;");
 
-		if (process.env.RUN == "dev") {
+		if (process.env.RUN == "dev" && process.env.DEV_DROP_TABLES == "true") {
 			const result = await client.query(`
-				select 
-					table_name 
-				from 
-					information_schema.tables 
-				where 
-					table_schema = 'public' 
+				select
+					table_name
+				from
+					information_schema.tables
+				where
+					table_schema = 'public'
 					and table_type = 'BASE TABLE'
 				;
 			`);
 			const all_tables = result.rows;
 			await Promise.all(all_tables.map((table, idx, arr) => {
 				client.query(`
-					drop table 
-						${table.table_name} 
+					drop table
+						${table.table_name}
 					cascade
 					;
 				`);

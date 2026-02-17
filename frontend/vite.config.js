@@ -18,7 +18,7 @@ export default { // https://vitejs.dev/config
 		proxy: {
 			"/backend": {
 				rewrite: (path) => path.replace(/^(\/backend)/, ""),
-				target: `http://host.docker.internal:${Number.parseInt(process.env.PORT)+1}`,
+				target: `http://localhost:${Number.parseInt(process.env.PORT)+1}`,
 				secure: false,
 				changeOrigin: true,
 				ws: true

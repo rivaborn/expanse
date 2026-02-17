@@ -17,12 +17,7 @@
 
 	function view_user() {
 		if (!selected_user) return;
-		globals_r.socket.emit("set view user", selected_user);
-		globals_r.socket.once("view user set", (data) => {
-			if (!data.error) {
-				dispatch("dispatch", { action: "set view user", username: data.username });
-			}
-		});
+		dispatch("dispatch", { action: "set view user", username: selected_user });
 	}
 
 	svelte.onMount(() => {

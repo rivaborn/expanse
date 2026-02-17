@@ -345,11 +345,21 @@
 	let selected_user = view_username;
 
 	function switch_view_user() {
-		if (!selected_user) return;
+		if (!selected_user || selected_user === view_username) return;
 		globals_r.socket.emit("set view user", selected_user);
-		globals_r.socket.once("view user set", (data) => {
+		globals_r.socket.once("view user set", async (data) => {
 			if (!data.error) {
-				dispatch("dispatch", { action: "set view user", username: data.username });
+				view_username = data.username;
+				if (data.last_updated_epoch) {
+					last_updated_epoch = data.last_updated_epoch;
+				}
+				try {
+					await refresh_item_list();
+					update_search_placeholder().catch((err) => console.error(err));
+					fill_subreddit_select().catch((err) => console.error(err));
+				} catch (err) {
+					console.error(err);
+				}
 			}
 		});
 	}
@@ -358,11 +368,14 @@
 		globals_r.socket.emit("page", "access");
 
 		if (view_username) {
-			globals_r.socket.emit("set view user", view_username);
-			globals_r.socket.once("view user set", (data) => {
-				if (!data.error && data.last_updated_epoch) {
-					last_updated_epoch = data.last_updated_epoch;
-				}
+			await new Promise((resolve) => {
+				globals_r.socket.emit("set view user", view_username);
+				globals_r.socket.once("view user set", (data) => {
+					if (!data.error && data.last_updated_epoch) {
+						last_updated_epoch = data.last_updated_epoch;
+					}
+					resolve();
+				});
 			});
 		}
 
