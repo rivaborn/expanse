@@ -143,6 +143,18 @@ app.get("/callback", (req, res, next) => {
 	})(req, res, next);
 });
 
+app.get("/get_users", async (req, res) => {
+	try {
+		const rows = await sql.get_all_non_purged_users();
+		const usernames = rows.map(r => r.username);
+		const online_usernames = usernames.filter(u => user.usernames_to_socket_ids[u]);
+		res.send({ usernames, online_usernames });
+	} catch (err) {
+		console.error(err);
+		res.send({ usernames: [], online_usernames: [] });
+	}
+});
+
 app.get("/authentication_check", (req, res) => {
 	if (req.isAuthenticated()) {
 		user.usernames_to_socket_ids[req.user.username] = req.query.socket_id;
@@ -216,7 +228,8 @@ app.all("*", (req, res) => {
 io.on("connect", (socket) => {
 	console.log(`socket (${socket.id}) connected`);
 
-	socket.username = null;
+	socket.auth_username = null;
+	socket.view_username = null;
 
 	socket.on("route", (route) => {
 		switch (route) {
@@ -227,31 +240,45 @@ io.on("connect", (socket) => {
 		}
 	});
 
+	socket.on("set view user", async (username) => {
+		try {
+			const u = await user.get(username);
+			socket.view_username = u.username;
+			const is_online = !!user.usernames_to_socket_ids[u.username];
+			io.to(socket.id).emit("view user set", { username: u.username, is_online, last_updated_epoch: u.last_updated_epoch });
+		} catch (err) {
+			console.error(err);
+			io.to(socket.id).emit("view user set", { error: "user not found" });
+		}
+	});
+
 	socket.on("page", async (page) => {
 		switch (page) {
 			case "landing":
 				break;
 			case "loading":
-				socket.username = user.socket_ids_to_usernames[socket.id];
+				socket.auth_username = user.socket_ids_to_usernames[socket.id];
 				try {
-					const u = await user.get(socket.username);
+					const u = await user.get(socket.auth_username);
 					await u.update(io, socket.id);
 				} catch (err) {
 					console.error(err);
 				}
 				break;
 			case "access":
-				socket.username = user.socket_ids_to_usernames[socket.id];
-				try {
-					const u = await user.get(socket.username);
+				socket.auth_username = user.socket_ids_to_usernames[socket.id];
+				if (socket.auth_username) {
+					try {
+						const u = await user.get(socket.auth_username);
 
-					io.to(socket.id).emit("store last updated epoch", u.last_updated_epoch);
+						io.to(socket.id).emit("store last updated epoch", u.last_updated_epoch);
 
-					sql.update_user(u.username, {
-						last_active_epoch: u.last_active_epoch = utils.now_epoch()
-					}).catch((err) => console.error(err));
-				} catch (err) {
-					console.error(err);
+						sql.update_user(u.username, {
+							last_active_epoch: u.last_active_epoch = utils.now_epoch()
+						}).catch((err) => console.error(err));
+					} catch (err) {
+						console.error(err);
+					}
 				}
 				break;
 			default:
@@ -261,7 +288,7 @@ io.on("connect", (socket) => {
 
 	socket.on("get data", async (filter, item_count, offset) => {
 		try {
-			const data = await sql.get_data(socket.username, filter, item_count, offset);
+			const data = await sql.get_data(socket.view_username, filter, item_count, offset);
 			io.to(socket.id).emit("got data", data);
 		} catch (err) {
 			console.error(err);
@@ -270,7 +297,7 @@ io.on("connect", (socket) => {
 
 	socket.on("get placeholder", async (filter) => {
 		try {
-			const placeholder = await sql.get_placeholder(socket.username, filter);
+			const placeholder = await sql.get_placeholder(socket.view_username, filter);
 			io.to(socket.id).emit("got placeholder", placeholder);
 		} catch (err) {
 			console.error(err);
@@ -279,7 +306,7 @@ io.on("connect", (socket) => {
 
 	socket.on("get subs", async (filter) => {
 		try {
-			const subs = await sql.get_subs(socket.username, filter);
+			const subs = await sql.get_subs(socket.view_username, filter);
 			io.to(socket.id).emit("got subs", subs);
 		} catch (err) {
 			console.error(err);
@@ -287,8 +314,9 @@ io.on("connect", (socket) => {
 	});
 
 	socket.on("renew comment", async (comment_id) => {
+		if (!socket.auth_username || socket.auth_username !== socket.view_username) return;
 		try {
-			const u = await user.get(socket.username);
+			const u = await user.get(socket.auth_username);
 			const comment_content = await u.renew_comment(comment_id);
 			io.to(socket.id).emit("renewed comment", comment_content);
 		} catch (err) {
@@ -297,12 +325,14 @@ io.on("connect", (socket) => {
 	});
 
 	socket.on("delete item from expanse acc", (item_id, item_category) => {
-		sql.delete_item_from_expanse_acc(socket.username, item_id, item_category).catch((err) => console.error(err));
+		if (!socket.auth_username || socket.auth_username !== socket.view_username) return;
+		sql.delete_item_from_expanse_acc(socket.auth_username, item_id, item_category).catch((err) => console.error(err));
 	});
 
 	socket.on("delete item from reddit acc", async (item_id, item_category, item_type) => {
+		if (!socket.auth_username || socket.auth_username !== socket.view_username) return;
 		try {
-			const u = await user.get(socket.username);
+			const u = await user.get(socket.auth_username);
 			u.delete_item_from_reddit_acc(item_id, item_category, item_type).catch((err) => console.error(err));
 		} catch (err) {
 			console.error(err);
@@ -310,8 +340,9 @@ io.on("connect", (socket) => {
 	});
 
 	socket.on("export", async () => {
+		if (!socket.auth_username || socket.auth_username !== socket.view_username) return;
 		try {
-			const filename = await file.create_export(socket.username);
+			const filename = await file.create_export(socket.auth_username);
 			io.to(socket.id).emit("download", filename);
 		} catch (err) {
 			console.error(err);
@@ -319,9 +350,9 @@ io.on("connect", (socket) => {
 	});
 
 	socket.on("disconnect", () => {
-		if (socket.username) { // logged in
-			(socket.username in user.usernames_to_socket_ids ? user.usernames_to_socket_ids[socket.username] = null : null); // set to null; not delete, bc username is needed in user.update_all
-			delete user.socket_ids_to_usernames[socket.id];	
+		if (socket.auth_username) { // logged in
+			(socket.auth_username in user.usernames_to_socket_ids ? user.usernames_to_socket_ids[socket.auth_username] = null : null); // set to null; not delete, bc username is needed in user.update_all
+			delete user.socket_ids_to_usernames[socket.id];
 		}
 	});
 });

@@ -7,21 +7,31 @@
 	import * as svelte from "svelte";
 	import axios from "axios";
 
-	let username = null;
+	let auth_username = null;
+	let view_username = null;
+	let available_users = [];
+	let online_users = [];
 
 	const globals_r = globals.readonly;
 
 	export async function load(obj) {
 		try {
-			const response = await axios.get(`${globals_r.backend}/authentication_check?socket_id=${globals_r.socket.id}`);
-			const response_data = response.data;
+			const [auth_response, users_response] = await Promise.all([
+				axios.get(`${globals_r.backend}/authentication_check?socket_id=${globals_r.socket.id}`),
+				axios.get(`${globals_r.backend}/get_users`)
+			]);
+			const auth_data = auth_response.data;
+			const users_data = users_response.data;
 
-			username = response_data.username; // undefined if use_page is "landing"
+			auth_username = auth_data.username || null;
+			view_username = auth_username;
+			available_users = users_data.usernames || [];
+			online_users = users_data.online_usernames || [];
 
 			return {
 				status: 200,
 				props: {
-					use_page: response_data.use_page
+					use_page: auth_data.use_page
 				}
 			};
 		} catch (err) {
@@ -34,7 +44,7 @@
 			} else { // get request failed
 				return {
 					status: 503
-				};	
+				};
 			}
 		}
 	};
@@ -45,11 +55,15 @@
 	let active_page = null;
 
 	function handle_component_dispatch(evt) {
-		switch (evt.detail) {
+		switch (evt.detail.action || evt.detail) {
 			case "switch page to loading":
 				active_page = Loading;
 				break;
 			case "switch page to access":
+				active_page = Access;
+				break;
+			case "set view user":
+				view_username = evt.detail.username;
 				active_page = Access;
 				break;
 			default:
@@ -84,4 +98,4 @@
 	<title>{globals_r.app_name}</title>
 	<meta name="description" content={globals_r.description}/>
 </svelte:head>
-<svelte:component this={active_page} on:dispatch={handle_component_dispatch} username={username}/>
+<svelte:component this={active_page} on:dispatch={handle_component_dispatch} {auth_username} {view_username} {available_users} {online_users}/>

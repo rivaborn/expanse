@@ -7,7 +7,7 @@
 	const globals_r = globals.readonly;
 </script>
 <script>
-	export let username;
+	export let auth_username;
 	
 	let progress_wrapper = null;
 
@@ -31,7 +31,7 @@
 	});
 </script>
 
-<Navbar username={username}/>
+<Navbar {auth_username}/>
 <div class="text-center mt-3 mb-4">
 	<h1 class="display-4">{globals_r.app_name}</h1>
 	<div id="loading_container" class="mt-1">

@@ -7,7 +7,7 @@
 	const globals_r = globals.readonly;
 </script>
 <script>
-	export let username;
+	export let auth_username;
 	export let show_data_anchors;
 
 	let [
@@ -88,7 +88,7 @@
 	}
 
 	svelte.onMount(() => {
-		if (!username) {
+		if (!auth_username) {
 			return;
 		}
 
@@ -119,13 +119,13 @@
 
 		purge_confirm_btn.addEventListener("click", (evt) => {
 			evt.preventDefault();
-			(purge_input.value == `purge u/${username}` ? purge() : utils.shake_element(purge_input));
+			(purge_input.value == `purge u/${auth_username}` ? purge() : utils.shake_element(purge_input));
 		});
 
 		purge_input.addEventListener("keydown", (evt) => {
 			if (evt.key == "Enter") {
 				evt.preventDefault();
-				(purge_input.value == `purge u/${username}` ? purge() : utils.shake_element(purge_input));
+				(purge_input.value == `purge u/${auth_username}` ? purge() : utils.shake_element(purge_input));
 			}
 		});
 
@@ -240,9 +240,9 @@
 </script>
 
 <nav class="mt-5 px-5">
-	{#if username}
+	{#if auth_username}
 		<span class="float-right">
-			<a href="https://www.reddit.com/u/{username}" target="_blank">u/<span id="username_wrapper">{username}</span></a>
+			<a href="https://www.reddit.com/u/{auth_username}" target="_blank">u/<span id="username_wrapper">{auth_username}</span></a>
 			<div class="btn-group dropdown">
 				<button bind:this={settings_btn} type="button" class="btn btn-link pl-1 py-0" data-toggle="dropdown" aria-haspopup="true" aria-expanded="false" data-display="static" id="settings_btn"><i class="fas fa-cog"></i></button>
 				<div bind:this={settings_menu} class="dropdown-menu dropdown-menu-right text-center mr-2 px-2 py-0" id="settings_menu">
@@ -283,7 +283,7 @@
 						<p class="mx-1">are you sure you want to purge your expanse account?</p>
 						<p class="mx-1">all of your Reddit items stored on expanse will be deleted</p>
 						<p class="mx-1">this cannot be undone</p>
-						<p class="mx-1 mb-0">type <b>purge u/{username}</b> to confirm</p>
+						<p class="mx-1 mb-0">type <b>purge u/{auth_username}</b> to confirm</p>
 						<form>
 							<div class="form-group d-flex justify-content-center mb-1">
 								<input bind:this={purge_input} class="form-control form-control-sm" type="text" id="purge_input"/>
@@ -301,6 +301,10 @@
 					</div>
 				</div>
 			</div>
+		</span>
+	{:else if show_data_anchors !== undefined}
+		<span class="float-right">
+			<a href="{globals_r.backend}/login" rel="external" class="btn btn-sm btn-outline-light">log in</a>
 		</span>
 	{/if}
 	<div class="clearfix"></div>

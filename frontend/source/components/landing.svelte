@@ -7,18 +7,53 @@
 	const globals_r = globals.readonly;
 </script>
 <script>
+	export let auth_username;
+	export let available_users;
+	export let online_users;
+
+	let selected_user = "";
+
+	const dispatch = svelte.createEventDispatcher();
+
+	function view_user() {
+		if (!selected_user) return;
+		globals_r.socket.emit("set view user", selected_user);
+		globals_r.socket.once("view user set", (data) => {
+			if (!data.error) {
+				dispatch("dispatch", { action: "set view user", username: data.username });
+			}
+		});
+	}
+
 	svelte.onMount(() => {
 		globals_r.socket.emit("page", "landing");
 	});
 </script>
 
-<Navbar/>
+<Navbar {auth_username}/>
 <div class="text-center mt-3">
 	<div class="jumbotron bg-dark mb-0 py-5">
 		<h1 class="display-4">{globals_r.app_name}</h1>
 		<p class="lead text-left">{globals_r.description}</p>
 		<p class="lead text-left">features: new items auto-sync, synced items not affected by Reddit deletion, search for items, filter by subreddit, import csv data from <a href="https://www.reddit.com/settings/data-request" target="_blank">Reddit data request</a>, export data as json</p>
 		<hr class="bg-secondary my-4"/>
+		{#if available_users.length > 0}
+			<div class="card bg-secondary mb-4 mx-auto" style="max-width: 400px;">
+				<div class="card-body py-3">
+					<p class="lead mb-2">browse stored data</p>
+					<div class="d-flex justify-content-center align-items-center">
+						<select bind:value={selected_user} class="form-control form-control-sm bg-light mr-2" style="max-width: 250px;">
+							<option value="" disabled>select a user</option>
+							{#each available_users as u}
+								<option value={u}>u/{u} {online_users.includes(u) ? '🟢' : '⚫'}</option>
+							{/each}
+						</select>
+						<button on:click={view_user} class="btn btn-sm btn-primary" disabled={!selected_user}>view</button>
+					</div>
+				</div>
+			</div>
+			<hr class="bg-secondary my-4"/>
+		{/if}
 		<div class="embed-responsive embed-responsive-16by9">
 			<iframe title="demo" class="embed-responsive-item" src="https://www.youtube.com/embed/4pxXM98ewIc" allow="fullscreen"></iframe>
 		</div>
