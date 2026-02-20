@@ -17,6 +17,8 @@
 
 	$: is_own_data = auth_username && auth_username === view_username;
 
+	let view_user_is_syncing = online_users.includes(view_username);
+
 	let [
 		last_updated_epoch,
 		last_updated_wrappers_update_interval_id,
@@ -350,8 +352,11 @@
 		globals_r.socket.once("view user set", async (data) => {
 			if (!data.error) {
 				view_username = data.username;
-				if (data.last_updated_epoch) {
+				view_user_is_syncing = data.is_online;
+				if (data.is_online && data.last_updated_epoch) {
 					last_updated_epoch = data.last_updated_epoch;
+				} else {
+					last_updated_epoch = null;
 				}
 				try {
 					await refresh_item_list();
@@ -371,8 +376,13 @@
 			await new Promise((resolve) => {
 				globals_r.socket.emit("set view user", view_username);
 				globals_r.socket.once("view user set", (data) => {
-					if (!data.error && data.last_updated_epoch) {
-						last_updated_epoch = data.last_updated_epoch;
+					if (!data.error) {
+						view_user_is_syncing = data.is_online;
+						if (data.is_online && data.last_updated_epoch) {
+							last_updated_epoch = data.last_updated_epoch;
+						} else {
+							last_updated_epoch = null;
+						}
 					}
 					resolve();
 				});
@@ -394,7 +404,7 @@
 		});
 
 		last_updated_wrappers_update_interval_id = setInterval(() => {
-			if (last_updated_epoch) {
+			if (last_updated_epoch && last_updated_wrapper_1 && last_updated_wrapper_2) {
 				last_updated_wrapper_1.innerHTML = utils.time_since(last_updated_epoch);
 				last_updated_wrapper_2.innerHTML = utils.epoch_to_formatted_datetime(last_updated_epoch);
 			}
@@ -486,7 +496,7 @@
 		<div class="d-flex justify-content-center align-items-center mb-2">
 			<select bind:value={selected_user} class="form-control form-control-sm bg-light mr-2" style="max-width: 250px;">
 				{#each available_users as u}
-					<option value={u}>u/{u} {online_users.includes(u) ? '🟢' : '⚫'}</option>
+					<option value={u}>u/{u} {online_users.includes(u) ? '(syncing)' : ''}</option>
 				{/each}
 			</select>
 			<button on:click={switch_view_user} class="btn btn-sm btn-primary" disabled={!selected_user || selected_user === view_username}>switch</button>
@@ -494,9 +504,11 @@
 	{/if}
 	<span>viewing: <b>u/{view_username}</b>{#if !is_own_data} <small class="text-muted">(read-only)</small>{/if}</span>
 	<br/>
-	<span>last updated: <b bind:this={last_updated_wrapper_1} id="last_updated_wrapper_1">?</b> ago</span>
-	<br/>
-	<small bind:this={last_updated_wrapper_2} class="d-none">?</small>
+	{#if view_user_is_syncing}
+		<span>last synced: <b bind:this={last_updated_wrapper_1} id="last_updated_wrapper_1">?</b> ago</span>
+		<br/>
+		<small bind:this={last_updated_wrapper_2} class="d-none">?</small>
+	{/if}
 	<div class="d-flex justify-content-center">
 		<div bind:this={new_data_alert_wrapper} class="px-1 d-none"></div>
 	</div>

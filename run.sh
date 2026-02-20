@@ -33,6 +33,7 @@ elif [ "$1" = "prod" ]; then
 		sh ./run.sh prod down
 		git pull
 		docker compose -f ./compose.prod.yaml pull
+		docker compose -f ./compose.prod.yaml build
 		sh ./run.sh prod up
 		return
 	fi

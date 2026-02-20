@@ -7,6 +7,8 @@ networks:
 services:
     db:
         image: docker.io/postgres:14
+        ports:
+            - "5432:5432"       
         logging:
             driver: "json-file"
             options:
@@ -22,7 +24,7 @@ services:
     app:
         depends_on:
             - db
-        image: expanse-awade-v3
+        image: expanse-oauth-fix-v1:1.0
         logging:
             driver: "json-file"
             options:

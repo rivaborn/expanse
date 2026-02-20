@@ -645,16 +645,14 @@ async function update_all(io) {
 				
 				const post_update_category_sync_info = user.category_sync_info;
 				
-				const socket_id = usernames_to_socket_ids[user.username];
-				if (socket_id) {
-					const categories_w_new_data = [];
-					for (const category in user.category_sync_info) {
-						(post_update_category_sync_info[category].latest_new_data_epoch > pre_update_category_sync_info[category].latest_new_data_epoch ? categories_w_new_data.push(category) : null);
-					}
-					(categories_w_new_data.length > 0 ? io.to(socket_id).emit("show refresh alert", categories_w_new_data) : null);
-
-					io.to(socket_id).emit("store last updated epoch", user.last_updated_epoch);
+				const view_room = `view:${user.username}`;
+				const categories_w_new_data = [];
+				for (const category in user.category_sync_info) {
+					(post_update_category_sync_info[category].latest_new_data_epoch > pre_update_category_sync_info[category].latest_new_data_epoch ? categories_w_new_data.push(category) : null);
 				}
+				(categories_w_new_data.length > 0 ? io.to(view_room).emit("show refresh alert", categories_w_new_data) : null);
+
+				io.to(view_room).emit("store last updated epoch", user.last_updated_epoch);
 			}
 		} catch (err) {
 			if (err != `Error: user (${username}) dne`) {

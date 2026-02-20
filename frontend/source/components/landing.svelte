@@ -40,7 +40,7 @@
 						<select bind:value={selected_user} class="form-control form-control-sm bg-light mr-2" style="max-width: 250px;">
 							<option value="" disabled>select a user</option>
 							{#each available_users as u}
-								<option value={u}>u/{u} {online_users.includes(u) ? '🟢' : '⚫'}</option>
+								<option value={u}>u/{u} {online_users.includes(u) ? '(syncing)' : ''}</option>
 							{/each}
 						</select>
 						<button on:click={view_user} class="btn btn-sm btn-primary" disabled={!selected_user}>view</button>

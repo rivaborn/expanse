@@ -242,8 +242,14 @@ io.on("connect", (socket) => {
 
 	socket.on("set view user", async (username) => {
 		try {
+			// leave previous view room if any
+			if (socket.view_username) {
+				socket.leave(`view:${socket.view_username}`);
+			}
 			const u = await user.get(username);
 			socket.view_username = u.username;
+			// join room for this viewed user so we get broadcast updates
+			socket.join(`view:${u.username}`);
 			const is_online = !!user.usernames_to_socket_ids[u.username];
 			io.to(socket.id).emit("view user set", { username: u.username, is_online, last_updated_epoch: u.last_updated_epoch });
 		} catch (err) {
