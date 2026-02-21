@@ -21,10 +21,10 @@ if [ "$1" = "dev" ]; then
 elif [ "$1" = "prod" ]; then
 	if [ "$2" = "up" ]; then
 		if [ "$3" = "--watch" ]; then
-			docker compose -f ./compose.prod.yaml up
+			docker compose -f ./compose.prod.yaml up --build
 			return
 		fi
-		docker compose -f ./compose.prod.yaml up -d
+		docker compose -f ./compose.prod.yaml up -d --build
 		return
 	elif [ "$2" = "down" ]; then
 		docker compose -f ./compose.prod.yaml down
