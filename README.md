@@ -2,6 +2,8 @@
 
 selfhosted multi-user web app for externally storing Reddit items (saved, created, upvoted, downvoted, hidden) to bypass Reddit's 1000-item listing limits
 
+the original versin is now inmaintenance mode and user ChosenOne912 (https://github.com/ChosenOne912) modified it with Reddits updated authentication. i used Claude Code to make changes allowing browsing of the database without logging into REddit.
+
 - features::
 	- new items auto-sync
 	- synced items not affected by Reddit deletion
@@ -29,3 +31,4 @@ selfhosted multi-user web app for externally storing Reddit items (saved, create
 	1. cd into repo
 	2. update: `sh ./run.sh prod update`
 - <details><summary>(optional) systemd service</summary><ol><li>cd into repo</li><li>update repo path in service file: <code>sed -i "s./opt/expanse.$PWD.g" ./expanse.service</code></li><li>allow executing <code>./run.sh</code>: <code>chmod +x ./run.sh</code></li><li>enable and start service: <code>systemctl enable ./expanse.service --now</code></li></ol></details>
+
