@@ -2,9 +2,9 @@
 
 selfhosted multi-user web app for externally storing Reddit items (saved, created, upvoted, downvoted, hidden) to bypass Reddit's 1000-item listing limits
 
-the original version is now in maintenance mode and user ChosenOne912 (https://github.com/ChosenOne912) modified it with Reddits updated authentication. i used Claude Code to make changes allowing browsing of the database without logging into reddit.
+the original version is now in maintenance mode and user ChosenOne912 (https://github.com/ChosenOne912) modified it with Reddits updated authentication. i used Claude Code to make changes allowing browsing of the database without logging into reddit - this enables continued use of the app to review your already downloded data whenever reddit decides to revoke all api keys.
 
-note - this app requires a reddit api key and reddit has a new process for giving out api keys. it was previously given out to anyone who wanted one but now you have to apply and are put on a waiting list.
+note - this app requires a reddit api key to download new data and reddit has a new process for giving out api keys. it was previously given out to anyone who wanted one but now you have to apply and are put on a waiting list.
 
 - features::
 	- new items auto-sync
@@ -40,6 +40,7 @@ note - this app requires a reddit api key and reddit has a new process for givin
 	2. update: `sh ./run.sh prod update`
 	
 - <details><summary>(optional) systemd service</summary><ol><li>cd into repo</li><li>update repo path in service file: <code>sed -i "s./opt/expanse.$PWD.g" ./expanse.service</code></li><li>allow executing <code>./run.sh</code>: <code>chmod +x ./run.sh</code></li><li>enable and start service: <code>systemctl enable ./expanse.service --now</code></li></ol></details>
+
 
 
 
