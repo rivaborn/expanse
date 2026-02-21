@@ -24,6 +24,8 @@ services:
     app:
         depends_on:
             - db
+        build:
+            context: .
         image: expanse-oauth-fix-v1:1.0
         logging:
             driver: "json-file"
