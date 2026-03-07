@@ -5,6 +5,7 @@ const logger = await import(`${process.env.backend}/model/logger.mjs`);
 const utils = await import(`${process.env.backend}/model/utils.mjs`);
 
 let update_all_completed = null;
+let ratelimit_wait_until = 0;
 
 const usernames_to_socket_ids = {};
 const socket_ids_to_usernames = {};
@@ -660,6 +661,12 @@ async function update_all(io) {
 					console.error(err);
 					logger.error(`user (${username}) update error (${err})`);
 
+					if (err.statusCode === 429 && err.response?.headers?.['x-ratelimit-reset']) {
+						ratelimit_wait_until = Date.now() + (Number(err.response.headers['x-ratelimit-reset']) * 1000) + 5000;
+					} else if (err.name === 'RateLimitError' && user?.requester?.ratelimitExpiration) {
+						ratelimit_wait_until = user.requester.ratelimitExpiration + 5000;
+					}
+
 					if (err.statusCode == 403 && err.options.qs.before) {
 						try {
 							switch (err.extras.category) {
@@ -690,7 +697,17 @@ async function update_all(io) {
 					}
 				}
 			}
-			await new Promise(resolve => setTimeout(resolve, 30 * 60 * 1000));
+			const now = Date.now();
+			if (ratelimit_wait_until > now) {
+				const wait_ms = ratelimit_wait_until - now;
+				console.log(`rate limit hit, waiting ${Math.ceil(wait_ms / 1000)}s for reset`);
+				await new Promise(resolve => setTimeout(resolve, wait_ms));
+				ratelimit_wait_until = 0;
+			} else if (user?.requester?.ratelimitRemaining < 50 && user?.requester?.ratelimitExpiration > now) {
+				const wait_ms = user.requester.ratelimitExpiration - now + 5000;
+				console.log(`rate limit low (${user.requester.ratelimitRemaining} remaining), waiting ${Math.ceil(wait_ms / 1000)}s`);
+				await new Promise(resolve => setTimeout(resolve, wait_ms));
+			}
 		}
 	} finally {
 		update_all_completed = true;
