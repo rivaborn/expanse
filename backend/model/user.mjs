@@ -632,67 +632,69 @@ async function update_all(io) {
 	console.log("update all started");
 	update_all_completed = false;
 
-	const all_usernames = Object.keys(usernames_to_socket_ids);
-	for (const username of all_usernames) {
-		let user = null;
-		try {
-			user = await get(username);
+	try {
+		const all_usernames = Object.keys(usernames_to_socket_ids);
+		for (const username of all_usernames) {
+			let user = null;
+			try {
+				user = await get(username);
 
-			if (user.last_updated_epoch && utils.now_epoch() - user.last_updated_epoch >= 30) {
-				const pre_update_category_sync_info = JSON.parse(JSON.stringify(user.category_sync_info));
+				if (user.last_updated_epoch && utils.now_epoch() - user.last_updated_epoch >= 30) {
+					const pre_update_category_sync_info = JSON.parse(JSON.stringify(user.category_sync_info));
 
-				await user.update();
-				
-				const post_update_category_sync_info = user.category_sync_info;
-				
-				const view_room = `view:${user.username}`;
-				const categories_w_new_data = [];
-				for (const category in user.category_sync_info) {
-					(post_update_category_sync_info[category].latest_new_data_epoch > pre_update_category_sync_info[category].latest_new_data_epoch ? categories_w_new_data.push(category) : null);
+					await user.update();
+
+					const post_update_category_sync_info = user.category_sync_info;
+
+					const view_room = `view:${user.username}`;
+					const categories_w_new_data = [];
+					for (const category in user.category_sync_info) {
+						(post_update_category_sync_info[category].latest_new_data_epoch > pre_update_category_sync_info[category].latest_new_data_epoch ? categories_w_new_data.push(category) : null);
+					}
+					(categories_w_new_data.length > 0 ? io.to(view_room).emit("show refresh alert", categories_w_new_data) : null);
+
+					io.to(view_room).emit("store last updated epoch", user.last_updated_epoch);
 				}
-				(categories_w_new_data.length > 0 ? io.to(view_room).emit("show refresh alert", categories_w_new_data) : null);
+			} catch (err) {
+				if (err != `Error: user (${username}) dne`) {
+					console.error(err);
+					logger.error(`user (${username}) update error (${err})`);
 
-				io.to(view_room).emit("store last updated epoch", user.last_updated_epoch);
-			}
-		} catch (err) {
-			if (err != `Error: user (${username}) dne`) {
-				console.error(err);
-				logger.error(`user (${username}) update error (${err})`);
-
-				if (err.statusCode == 403 && err.options.qs.before) {
-					try {
-						switch (err.extras.category) {
-							case "saved":
-								await user.replace_latest_fn(err.extras.category, "mixed");
-								break;
-							case "created":
-								await Promise.all([
-									user.replace_latest_fn(err.extras.category, "posts"),
-									user.replace_latest_fn(err.extras.category, "comments")
-								]);
-								break;
-							case "upvoted":
-							case "downvoted":
-							case "hidden":
-								await user.replace_latest_fn(err.extras.category, "posts");
-								break;
-							default:
-								break;
+					if (err.statusCode == 403 && err.options.qs.before) {
+						try {
+							switch (err.extras.category) {
+								case "saved":
+									await user.replace_latest_fn(err.extras.category, "mixed");
+									break;
+								case "created":
+									await Promise.all([
+										user.replace_latest_fn(err.extras.category, "posts"),
+										user.replace_latest_fn(err.extras.category, "comments")
+									]);
+									break;
+								case "upvoted":
+								case "downvoted":
+								case "hidden":
+									await user.replace_latest_fn(err.extras.category, "posts");
+									break;
+								default:
+									break;
+							}
+							await sql.update_user(user.username, {
+								category_sync_info: JSON.stringify(user.category_sync_info)
+							});
+						} catch (err) {
+							console.error(err);
+							logger.error(`user (${username}) replace_latest_fn error (${err})`);
 						}
-						await sql.update_user(user.username, {
-							category_sync_info: JSON.stringify(user.category_sync_info)
-						});
-					} catch (err) {
-						console.error(err);
-						logger.error(`user (${username}) replace_latest_fn error (${err})`);
 					}
 				}
 			}
 		}
+	} finally {
+		update_all_completed = true;
+		console.log("update all completed");
 	}
-
-	update_all_completed = true;
-	console.log("update all completed");
 }
 function cycle_update_all(io) {
 	update_all(io).catch((err) => console.error(err));
