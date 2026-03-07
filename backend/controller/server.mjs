@@ -1,6 +1,11 @@
 process.env.backend = process.cwd();
 process.env.frontend = process.env.backend.replace("backend", "frontend");
 
+const _console_log = console.log.bind(console);
+const _console_error = console.error.bind(console);
+console.log = (...args) => _console_log(new Date().toISOString(), ...args);
+console.error = (...args) => _console_error(new Date().toISOString(), ...args);
+
 import * as socket_io_server from "socket.io";
 import express from "express";
 import http from "http";

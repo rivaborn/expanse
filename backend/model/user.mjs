@@ -690,6 +690,7 @@ async function update_all(io) {
 					}
 				}
 			}
+			await new Promise(resolve => setTimeout(resolve, 30 * 60 * 1000));
 		}
 	} finally {
 		update_all_completed = true;
