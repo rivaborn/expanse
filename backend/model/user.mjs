@@ -425,7 +425,7 @@ class User {
 		(r_subs.length != 0 ? await this.request_item_icon_urls("r/", r_subs) : null);
 		(u_subs.length != 0 ? await this.request_item_icon_urls("u/", u_subs) : null);
 	}
-	async update(io=null, socket_id=null) {
+	async update(io=null, socket_id=null, is_retry=false) {
 		console.log(`updating user (${this.username})`);
 
 		let progress = (io ? 0 : null);
@@ -433,18 +433,22 @@ class User {
 
 		this.requester = reddit.create_requester(cryptr.decrypt(this.reddit_api_refresh_token_encrypted));
 		this.me = await this.requester.getMe();
-		
-		this.new_data = {
-			items: {},
-			category_item_ids: {},
-			item_sub_icon_urls: {}
-		};
-		this.sub_icon_urls_to_get = new Set();
-		this.imported_fns_to_delete = new Set();
 
-		const categories = ["saved", "created", "upvoted", "downvoted", "hidden"];
-		for (const category of categories) {
-			this.new_data.category_item_ids[category] = new Set();
+		if (!is_retry) {
+			this.new_data = {
+				items: {},
+				category_item_ids: {},
+				item_sub_icon_urls: {}
+			};
+			this.sub_icon_urls_to_get = new Set();
+			this.imported_fns_to_delete = new Set();
+
+			const categories = ["saved", "created", "upvoted", "downvoted", "hidden"];
+			for (const category of categories) {
+				this.new_data.category_item_ids[category] = new Set();
+			}
+		} else {
+			console.log(`resuming update for (${this.username}) with ${Object.keys(this.new_data?.items ?? {}).length} carried items`);
 		}
 
 		const s_promise = new Promise(async (resolve, reject) => {
@@ -660,7 +664,7 @@ async function update_all(io) {
 					if (!user.last_updated_epoch || utils.now_epoch() - user.last_updated_epoch >= 30) {
 						const pre_update_category_sync_info = JSON.parse(JSON.stringify(user.category_sync_info));
 
-						await user.update();
+						await user.update(null, null, retry_count > 0);
 
 						const post_update_category_sync_info = user.category_sync_info;
 
