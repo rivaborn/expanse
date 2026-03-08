@@ -1,4 +1,4 @@
-# Expanse - Data Review Mode: Full Session Summary
+# Expanse - Full Session Summary
 
 ## Table of Contents
 
@@ -9,15 +9,20 @@
 5. [Bug Fixes After Testing](#5-bug-fixes-after-testing)
 6. [Push to Remote](#6-push-to-remote)
 7. [Docker Deployment](#7-docker-deployment)
-8. [Tech Stack](#8-tech-stack)
-9. [Files Modified](#9-files-modified)
-10. [Commit History](#10-commit-history)
+8. [Background Sync Fixes](#8-background-sync-fixes)
+9. [Tech Stack](#9-tech-stack)
+10. [Files Modified](#10-files-modified)
+11. [Commit History](#11-commit-history)
 
 ---
 
 ## 1. Overview
 
-The goal of this session was to add a **Data Review Mode** to Expanse, allowing any visitor to browse stored Reddit data for any user in the database **without requiring Reddit authentication**. Write operations (delete, renew, export, import, purge) remain gated behind authentication. Additionally, an existing PostgreSQL database was migrated from another server, and the application was prepared for Docker deployment.
+This document covers two sessions of work on Expanse:
+
+**Session 1:** Added **Data Review Mode** — allowing any visitor to browse stored Reddit data for any user in the database without requiring Reddit authentication. Write operations remain gated behind authentication. An existing PostgreSQL database was migrated from another server, and the application was prepared for Docker deployment.
+
+**Session 2:** Fixed the **background sync cycle** — resolving a series of bugs that caused users to go days without updates, made logging more informative, and ensured heavy users like `rivaborn` (with large saved histories) eventually complete a successful sync.
 
 ---
 
@@ -538,7 +543,146 @@ Two services:
 
 ---
 
-## 8. Tech Stack
+## 8. Background Sync Fixes
+
+### Context
+
+After deployment, users were showing "last synced" timestamps hours or days old despite `UPDATE_CYCLE_INTERVAL=60`. Heavy users like `rivaborn` and `damaginator1` (large saved histories) never completed a successful sync. The following bugs were identified and fixed across multiple iterations.
+
+---
+
+### Bug 1: Sync Cycle Permanently Halting
+
+**Root cause:** Any unhandled exception in `update_all()` set `update_all_completed = false` permanently, preventing all future cycles until the server restarted.
+
+**Fix:** Wrapped the entire loop body in `try/finally` to guarantee `update_all_completed = true` always executes.
+
+**File:** `backend/model/user.mjs`
+
+---
+
+### Bug 2: Fixed 30-Minute Stagger Replaced with Dynamic Rate Limit Backoff
+
+**Problem:** A fixed 30-minute delay between users was inefficient and didn't respond to Reddit's actual rate limit state.
+
+**Fix:** After each user sync, check snoowrap's `ratelimitRemaining` and `ratelimitExpiration` properties. If remaining is low, wait until the Reddit rate limit window resets. If a `RateLimitError` or `429` is thrown, extract the wait time from the response headers.
+
+**Files:** `backend/model/user.mjs`
+
+---
+
+### Bug 3: Timestamps Missing from Logs
+
+**Fix:** Added a timestamp override at the top of `server.mjs`:
+
+```javascript
+const _console_log = console.log.bind(console);
+const _console_error = console.error.bind(console);
+console.log = (...args) => _console_log(new Date().toISOString(), ...args);
+console.error = (...args) => _console_error(new Date().toISOString(), ...args);
+```
+
+**File:** `backend/controller/server.mjs`
+
+---
+
+### Bug 4: `err.name === 'RateLimitError'` Always False
+
+**Root cause:** snoowrap's `RateLimitError` class extends `Error` without setting `this.name`, so `err.name` is always `'Error'`. The retry condition never triggered.
+
+**Fix:** Changed `err.name === 'RateLimitError'` to `err.constructor.name === 'RateLimitError'`.
+
+**File:** `backend/model/user.mjs`
+
+---
+
+### Bug 5: Never-Synced Users Skipped
+
+**Root cause:** The condition `if (user.last_updated_epoch && ...)` skipped users with no prior sync (null `last_updated_epoch`).
+
+**Fix:** Changed to `if (!user.last_updated_epoch || utils.now_epoch() - user.last_updated_epoch >= 30)` so users with no prior sync are included.
+
+**File:** `backend/model/user.mjs`
+
+---
+
+### Bug 6: "Last Synced" Hidden for Offline Users
+
+**Root cause 1:** `last_updated_epoch` was only set in the frontend when `data.is_online && data.last_updated_epoch` — offline users always showed `?`.
+
+**Fix:** Changed to `last_updated_epoch = data.last_updated_epoch || null` — uses the DB value regardless of online status.
+
+**Root cause 2:** The template used `{#if view_user_is_syncing}` to gate the "last synced" display block, hiding it for any user not currently online.
+
+**Fix:** Changed to `{#if last_updated_epoch}` — renders whenever the DB has a timestamp.
+
+**File:** `frontend/source/components/access.svelte`
+
+---
+
+### Bug 7: Rate-Limited Users Stuck in Infinite Retry Loop
+
+**Problem:** A user with a very large saved history (e.g. `damaginator1`) exhausted the full 1000-request rate limit budget on every attempt. With no retry cap, the sync cycle was permanently stuck on that user, blocking all others.
+
+**Fix:** Added a `retry_count` variable. `should_retry` is set to `(++retry_count < 3)` — after 3 consecutive rate-limit hits, the user is skipped for the current cycle with a log entry: `user (X) skipped after 3 rate limit retries`.
+
+**File:** `backend/model/user.mjs`
+
+---
+
+### Bug 8: Retry Re-Fetched User from DB (Discarding Cursor Progress)
+
+**Root cause:** Every retry iteration called `user = await get(username)`, re-fetching from DB and discarding all in-memory `category_sync_info` progress made by `parse_listing` during the failed attempt. Each retry started from the same stale cursor.
+
+**Fix:** Moved `user = await get(username)` outside the `do/while` retry loop. The same in-memory user object is reused across retries, so cursor advances (updated `latest_fn` values) are preserved.
+
+**File:** `backend/model/user.mjs`
+
+---
+
+### Bug 9: Redundant Icon Fetch Requests Burning Rate Limit
+
+**Root cause:** `get_new_item_icon_urls()` fired one API request per unique `u/` author (individually, all simultaneously via `Promise.all`), even for icons already stored in the DB. With 500 imported items from 500 different user authors, this alone consumed ~500 of the 1000 rate-limit requests per window.
+
+**Fix:** Before making any API calls, query the `item_sub_icon_url` table for which subs are already cached. Filter them out before calling `request_item_icon_urls()`.
+
+**New SQL function:** `get_cached_sub_icons(subs)` — takes an array of sub names, returns a Set of those already in the cache.
+
+**Files:** `backend/model/user.mjs`, `backend/model/sql.mjs`
+
+---
+
+### Bug 10: Retry Discarded Accumulated Items
+
+**Root cause:** `update()` resets `new_data`, `sub_icon_urls_to_get`, and `imported_fns_to_delete` at the start of every call. On retry, items fetched in the previous attempt were discarded. Meanwhile, `latest_fn` was preserved in memory pointing to the newest item — so the next `sync_category` call found 0 new items. Result: `update()` succeeded but saved nothing.
+
+**Fix:** Added `is_retry=false` parameter to `update()`. When `true`, the reset of `new_data`, `sub_icon_urls_to_get`, and `imported_fns_to_delete` is skipped, carrying forward all accumulated items. The retry loop passes `retry_count > 0` as `is_retry`.
+
+**File:** `backend/model/user.mjs`
+
+---
+
+### Improvement: Per-Category Download Count Logging
+
+Added `_format_item_counts()` helper method that returns a summary string:
+
+```
+Saved (5), Created (20), Upvoted (15), Downvoted (25), Hidden (55)
+```
+
+This is logged after each category's sync+import completes and on the final "updated user" line, giving visibility into incremental progress per session:
+
+```
+2026-03-08T20:40:05.711Z rivaborn upvoted done - Saved (0), Created (0), Upvoted (20), Downvoted (0), Hidden (0)
+2026-03-08T20:40:05.900Z rivaborn saved done - Saved (85), Created (0), Upvoted (20), Downvoted (0), Hidden (0)
+2026-03-08T20:40:05.945Z updated user (rivaborn) - Saved (85), Created (12), Upvoted (20), Downvoted (3), Hidden (0)
+```
+
+**File:** `backend/model/user.mjs`
+
+---
+
+## 9. Tech Stack
 
 | Layer          | Technology                                      |
 |----------------|------------------------------------------------|
@@ -553,23 +697,24 @@ Two services:
 
 ---
 
-## 9. Files Modified
+## 10. Files Modified
 
 | File | Description |
 |------|-------------|
-| `backend/controller/server.mjs` | New `/get_users` endpoint, `"set view user"` socket event, renamed socket properties, write handler guards |
-| `backend/model/sql.mjs` | New `get_all_non_purged_users()` function, dev table drop safety gate (`DEV_DROP_TABLES`) |
+| `backend/controller/server.mjs` | New `/get_users` endpoint, `"set view user"` socket event, renamed socket properties, write handler guards, ISO timestamp injection for all console output |
+| `backend/model/user.mjs` | New `/get_users` endpoint, `"set view user"` socket event, renamed socket properties, write handler guards; sync cycle halting fix; dynamic rate limit backoff; `err.constructor.name` fix; retry loop with max 3 retries; user fetched once before retry loop; `is_retry` parameter to preserve `new_data`; `_format_item_counts()` helper; per-category completion logs |
+| `backend/model/sql.mjs` | New `get_all_non_purged_users()`, dev table drop safety gate (`DEV_DROP_TABLES`), new `get_cached_sub_icons()` to filter already-cached icon subs |
 | `frontend/source/routes/index.svelte` | Dual API calls in `load()`, module-to-instance variable bridging, `"set view user"` dispatch handler |
 | `frontend/source/components/landing.svelte` | User picker dropdown with online status, immediate dispatch on view |
-| `frontend/source/components/access.svelte` | `auth_username`/`view_username` props, `is_own_data` reactive flag, user switcher, awaited `"set view user"` on mount, conditional write buttons, removed login button |
+| `frontend/source/components/access.svelte` | `auth_username`/`view_username` props, `is_own_data` reactive flag, user switcher, awaited `"set view user"` on mount, conditional write buttons, removed login button; "last synced" shown for all users regardless of online status |
 | `run.sh` | Added `docker compose build` step to `prod update` command |
-| `frontend/source/components/navbar.svelte` | Renamed `username` to `auth_username`, added `show_data_anchors` prop, removed login button (login is landing-page only) |
+| `frontend/source/components/navbar.svelte` | Renamed `username` to `auth_username`, added `show_data_anchors` prop, removed login button |
 | `frontend/source/components/loading.svelte` | Renamed `username` prop to `auth_username` |
 | `frontend/vite.config.js` | Changed proxy target from `host.docker.internal` to `localhost` |
 
 ---
 
-## 10. Commit History
+## 11. Commit History
 
 | Hash | Message |
 |------|---------|
@@ -577,5 +722,15 @@ Two services:
 | `88b1bd3` | Add data review mode: allow browsing stored data without authentication |
 | `dc77a60` | Fix data review mode: reactivity, race conditions, and local dev proxy |
 | `bd19d9f` | Remove login buttons from access page and navbar |
-
-All four commits were pushed to `https://github.com/rivaborn/expanse.git` on the `main` branch.
+| `fe79830` | Revise README for app updates and API key info |
+| `ea4ec29` | Fix background sync cycle permanently halting on unexpected errors |
+| `56eea20` | Add timestamps to logs and stagger user updates by 30 minutes |
+| `79b05c0` | Replace fixed delay with dynamic rate limit backoff |
+| `0ba7586` | Retry user update after rate limit instead of skipping |
+| `b64e0a1` | Fix RateLimitError retry check and never-synced users |
+| `68d0a66` | Show last synced time for all users regardless of login status |
+| `2c0a3c1` | Show last synced for all users, not just currently online ones |
+| `4fb39de` | Preserve in-memory user state between rate limit retries |
+| `aa3f78a` | Skip icon fetches for subs already in DB cache |
+| `d101708` | Preserve accumulated items across rate-limit retries |
+| `6c654c1` | Log per-category download counts during user sync |
