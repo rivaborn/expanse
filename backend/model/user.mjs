@@ -405,8 +405,8 @@ class User {
 		}
 	}
 	async get_new_item_icon_urls() {
-		let r_subs = []; // actual subs
-		let u_subs = []; // users as subs
+		let r_subs = [];
+		let u_subs = [];
 
 		for (const sub of this.sub_icon_urls_to_get) {
 			if (sub.startsWith("r/")) {
@@ -415,6 +415,12 @@ class User {
 				u_subs.push(sub);
 			}
 		}
+
+		const all_subs = [...r_subs, ...u_subs];
+		if (all_subs.length == 0) return;
+		const cached = await sql.get_cached_sub_icons(all_subs);
+		r_subs = r_subs.filter((s) => !cached.has(s));
+		u_subs = u_subs.filter((s) => !cached.has(s));
 
 		(r_subs.length != 0 ? await this.request_item_icon_urls("r/", r_subs) : null);
 		(u_subs.length != 0 ? await this.request_item_icon_urls("u/", u_subs) : null);

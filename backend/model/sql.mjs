@@ -629,6 +629,15 @@ async function delete_imported_fns(fns) {
 	});
 }
 
+async function get_cached_sub_icons(subs) {
+	if (subs.length == 0) return new Set();
+	const rows = await query({
+		text: `select sub from item_sub_icon_url where sub = ANY($1);`,
+		values: [subs]
+	});
+	return new Set(rows.map((r) => r.sub));
+}
+
 export {
 	pool,
 	init_db,
@@ -645,5 +654,6 @@ export {
 	delete_item_from_expanse_acc,
 	parse_import,
 	get_fns_to_import,
-	delete_imported_fns
+	delete_imported_fns,
+	get_cached_sub_icons
 };
