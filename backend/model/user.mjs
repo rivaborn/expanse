@@ -456,6 +456,7 @@ class User {
 				await this.sync_category("saved", "mixed");
 				await this.import_category("saved", "mixed");
 				(io ? io.to(socket_id).emit("update progress", ++progress, complete) : null);
+				console.log(`${this.username} saved done - ${this._format_item_counts()}`);
 				resolve();
 			} catch (err) {
 				err.extras = {
@@ -473,6 +474,7 @@ class User {
 				]);
 				await this.import_category("created", "mixed");
 				(io ? io.to(socket_id).emit("update progress", ++progress, complete) : null);
+				console.log(`${this.username} created done - ${this._format_item_counts()}`);
 				resolve();
 			} catch (err) {
 				err.extras = {
@@ -487,6 +489,7 @@ class User {
 				await this.sync_category("upvoted", "posts");
 				await this.import_category("upvoted", "posts");
 				(io ? io.to(socket_id).emit("update progress", ++progress, complete) : null);
+				console.log(`${this.username} upvoted done - ${this._format_item_counts()}`);
 				resolve();
 			} catch (err) {
 				err.extras = {
@@ -501,6 +504,7 @@ class User {
 				await this.sync_category("downvoted", "posts");
 				await this.import_category("downvoted", "posts");
 				(io ? io.to(socket_id).emit("update progress", ++progress, complete) : null);
+				console.log(`${this.username} downvoted done - ${this._format_item_counts()}`);
 				resolve();
 			} catch (err) {
 				err.extras = {
@@ -515,6 +519,7 @@ class User {
 				await this.sync_category("hidden", "posts");
 				await this.import_category("hidden", "posts");
 				(io ? io.to(socket_id).emit("update progress", ++progress, complete) : null);
+				console.log(`${this.username} hidden done - ${this._format_item_counts()}`);
 				resolve();
 			} catch (err) {
 				err.extras = {
@@ -542,7 +547,7 @@ class User {
 			last_updated_epoch: this.last_updated_epoch = utils.now_epoch()
 		});
 		(io ? io.to(socket_id).emit("update progress", ++progress, complete) : null);
-		console.log(`updated user (${this.username})`);
+		console.log(`updated user (${this.username}) - ${this._format_item_counts()}`);
 
 		delete this.new_data;
 		delete this.sub_icon_urls_to_get;
