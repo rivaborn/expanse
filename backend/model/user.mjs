@@ -637,77 +637,83 @@ async function update_all(io) {
 		const all_usernames = Object.keys(usernames_to_socket_ids);
 		for (const username of all_usernames) {
 			let user = null;
-			try {
-				user = await get(username);
+			let should_retry = false;
+			do {
+				should_retry = false;
+				try {
+					user = await get(username);
 
-				if (user.last_updated_epoch && utils.now_epoch() - user.last_updated_epoch >= 30) {
-					const pre_update_category_sync_info = JSON.parse(JSON.stringify(user.category_sync_info));
+					if (user.last_updated_epoch && utils.now_epoch() - user.last_updated_epoch >= 30) {
+						const pre_update_category_sync_info = JSON.parse(JSON.stringify(user.category_sync_info));
 
-					await user.update();
+						await user.update();
 
-					const post_update_category_sync_info = user.category_sync_info;
+						const post_update_category_sync_info = user.category_sync_info;
 
-					const view_room = `view:${user.username}`;
-					const categories_w_new_data = [];
-					for (const category in user.category_sync_info) {
-						(post_update_category_sync_info[category].latest_new_data_epoch > pre_update_category_sync_info[category].latest_new_data_epoch ? categories_w_new_data.push(category) : null);
+						const view_room = `view:${user.username}`;
+						const categories_w_new_data = [];
+						for (const category in user.category_sync_info) {
+							(post_update_category_sync_info[category].latest_new_data_epoch > pre_update_category_sync_info[category].latest_new_data_epoch ? categories_w_new_data.push(category) : null);
+						}
+						(categories_w_new_data.length > 0 ? io.to(view_room).emit("show refresh alert", categories_w_new_data) : null);
+
+						io.to(view_room).emit("store last updated epoch", user.last_updated_epoch);
 					}
-					(categories_w_new_data.length > 0 ? io.to(view_room).emit("show refresh alert", categories_w_new_data) : null);
+				} catch (err) {
+					if (err != `Error: user (${username}) dne`) {
+						console.error(err);
+						logger.error(`user (${username}) update error (${err})`);
 
-					io.to(view_room).emit("store last updated epoch", user.last_updated_epoch);
-				}
-			} catch (err) {
-				if (err != `Error: user (${username}) dne`) {
-					console.error(err);
-					logger.error(`user (${username}) update error (${err})`);
+						if (err.statusCode === 429 && err.response?.headers?.['x-ratelimit-reset']) {
+							ratelimit_wait_until = Date.now() + (Number(err.response.headers['x-ratelimit-reset']) * 1000) + 5000;
+							should_retry = true;
+						} else if (err.name === 'RateLimitError' && user?.requester?.ratelimitExpiration) {
+							ratelimit_wait_until = user.requester.ratelimitExpiration + 5000;
+							should_retry = true;
+						}
 
-					if (err.statusCode === 429 && err.response?.headers?.['x-ratelimit-reset']) {
-						ratelimit_wait_until = Date.now() + (Number(err.response.headers['x-ratelimit-reset']) * 1000) + 5000;
-					} else if (err.name === 'RateLimitError' && user?.requester?.ratelimitExpiration) {
-						ratelimit_wait_until = user.requester.ratelimitExpiration + 5000;
-					}
-
-					if (err.statusCode == 403 && err.options.qs.before) {
-						try {
-							switch (err.extras.category) {
-								case "saved":
-									await user.replace_latest_fn(err.extras.category, "mixed");
-									break;
-								case "created":
-									await Promise.all([
-										user.replace_latest_fn(err.extras.category, "posts"),
-										user.replace_latest_fn(err.extras.category, "comments")
-									]);
-									break;
-								case "upvoted":
-								case "downvoted":
-								case "hidden":
-									await user.replace_latest_fn(err.extras.category, "posts");
-									break;
-								default:
-									break;
+						if (err.statusCode == 403 && err.options.qs.before) {
+							try {
+								switch (err.extras.category) {
+									case "saved":
+										await user.replace_latest_fn(err.extras.category, "mixed");
+										break;
+									case "created":
+										await Promise.all([
+											user.replace_latest_fn(err.extras.category, "posts"),
+											user.replace_latest_fn(err.extras.category, "comments")
+										]);
+										break;
+									case "upvoted":
+									case "downvoted":
+									case "hidden":
+										await user.replace_latest_fn(err.extras.category, "posts");
+										break;
+									default:
+										break;
+								}
+								await sql.update_user(user.username, {
+									category_sync_info: JSON.stringify(user.category_sync_info)
+								});
+							} catch (err) {
+								console.error(err);
+								logger.error(`user (${username}) replace_latest_fn error (${err})`);
 							}
-							await sql.update_user(user.username, {
-								category_sync_info: JSON.stringify(user.category_sync_info)
-							});
-						} catch (err) {
-							console.error(err);
-							logger.error(`user (${username}) replace_latest_fn error (${err})`);
 						}
 					}
 				}
-			}
-			const now = Date.now();
-			if (ratelimit_wait_until > now) {
-				const wait_ms = ratelimit_wait_until - now;
-				console.log(`rate limit hit, waiting ${Math.ceil(wait_ms / 1000)}s for reset`);
-				await new Promise(resolve => setTimeout(resolve, wait_ms));
-				ratelimit_wait_until = 0;
-			} else if (user?.requester?.ratelimitRemaining < 50 && user?.requester?.ratelimitExpiration > now) {
-				const wait_ms = user.requester.ratelimitExpiration - now + 5000;
-				console.log(`rate limit low (${user.requester.ratelimitRemaining} remaining), waiting ${Math.ceil(wait_ms / 1000)}s`);
-				await new Promise(resolve => setTimeout(resolve, wait_ms));
-			}
+				const now = Date.now();
+				if (ratelimit_wait_until > now) {
+					const wait_ms = ratelimit_wait_until - now;
+					console.log(`rate limit hit, waiting ${Math.ceil(wait_ms / 1000)}s for reset`);
+					await new Promise(resolve => setTimeout(resolve, wait_ms));
+					ratelimit_wait_until = 0;
+				} else if (!should_retry && user?.requester?.ratelimitRemaining < 50 && user?.requester?.ratelimitExpiration > now) {
+					const wait_ms = user.requester.ratelimitExpiration - now + 5000;
+					console.log(`rate limit low (${user.requester.ratelimitRemaining} remaining), waiting ${Math.ceil(wait_ms / 1000)}s`);
+					await new Promise(resolve => setTimeout(resolve, wait_ms));
+				}
+			} while (should_retry);
 		}
 	} finally {
 		update_all_completed = true;
