@@ -353,11 +353,7 @@
 			if (!data.error) {
 				view_username = data.username;
 				view_user_is_syncing = data.is_online;
-				if (data.is_online && data.last_updated_epoch) {
-					last_updated_epoch = data.last_updated_epoch;
-				} else {
-					last_updated_epoch = null;
-				}
+				last_updated_epoch = data.last_updated_epoch || null;
 				try {
 					await refresh_item_list();
 					update_search_placeholder().catch((err) => console.error(err));
@@ -378,11 +374,7 @@
 				globals_r.socket.once("view user set", (data) => {
 					if (!data.error) {
 						view_user_is_syncing = data.is_online;
-						if (data.is_online && data.last_updated_epoch) {
-							last_updated_epoch = data.last_updated_epoch;
-						} else {
-							last_updated_epoch = null;
-						}
+						last_updated_epoch = data.last_updated_epoch || null;
 					}
 					resolve();
 				});
