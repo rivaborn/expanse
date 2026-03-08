@@ -637,12 +637,20 @@ async function update_all(io) {
 		const all_usernames = Object.keys(usernames_to_socket_ids);
 		for (const username of all_usernames) {
 			let user = null;
+			try {
+				user = await get(username);
+			} catch (err) {
+				if (err != `Error: user (${username}) dne`) {
+					console.error(err);
+					logger.error(`user (${username}) get error (${err})`);
+				}
+				continue;
+			}
 			let should_retry = false;
+			let retry_count = 0;
 			do {
 				should_retry = false;
 				try {
-					user = await get(username);
-
 					if (!user.last_updated_epoch || utils.now_epoch() - user.last_updated_epoch >= 30) {
 						const pre_update_category_sync_info = JSON.parse(JSON.stringify(user.category_sync_info));
 
@@ -660,45 +668,43 @@ async function update_all(io) {
 						io.to(view_room).emit("store last updated epoch", user.last_updated_epoch);
 					}
 				} catch (err) {
-					if (err != `Error: user (${username}) dne`) {
-						console.error(err);
-						logger.error(`user (${username}) update error (${err})`);
+					console.error(err);
+					logger.error(`user (${username}) update error (${err})`);
 
-						if (err.statusCode === 429 && err.response?.headers?.['x-ratelimit-reset']) {
-							ratelimit_wait_until = Date.now() + (Number(err.response.headers['x-ratelimit-reset']) * 1000) + 5000;
-							should_retry = true;
-						} else if (err.constructor.name === 'RateLimitError' && user?.requester?.ratelimitExpiration) {
-							ratelimit_wait_until = user.requester.ratelimitExpiration + 5000;
-							should_retry = true;
-						}
+					if (err.statusCode === 429 && err.response?.headers?.['x-ratelimit-reset']) {
+						ratelimit_wait_until = Date.now() + (Number(err.response.headers['x-ratelimit-reset']) * 1000) + 5000;
+						should_retry = (++retry_count < 3);
+					} else if (err.constructor.name === 'RateLimitError' && user?.requester?.ratelimitExpiration) {
+						ratelimit_wait_until = user.requester.ratelimitExpiration + 5000;
+						should_retry = (++retry_count < 3);
+					}
 
-						if (err.statusCode == 403 && err.options.qs.before) {
-							try {
-								switch (err.extras.category) {
-									case "saved":
-										await user.replace_latest_fn(err.extras.category, "mixed");
-										break;
-									case "created":
-										await Promise.all([
-											user.replace_latest_fn(err.extras.category, "posts"),
-											user.replace_latest_fn(err.extras.category, "comments")
-										]);
-										break;
-									case "upvoted":
-									case "downvoted":
-									case "hidden":
-										await user.replace_latest_fn(err.extras.category, "posts");
-										break;
-									default:
-										break;
-								}
-								await sql.update_user(user.username, {
-									category_sync_info: JSON.stringify(user.category_sync_info)
-								});
-							} catch (err) {
-								console.error(err);
-								logger.error(`user (${username}) replace_latest_fn error (${err})`);
+					if (err.statusCode == 403 && err.options.qs.before) {
+						try {
+							switch (err.extras.category) {
+								case "saved":
+									await user.replace_latest_fn(err.extras.category, "mixed");
+									break;
+								case "created":
+									await Promise.all([
+										user.replace_latest_fn(err.extras.category, "posts"),
+										user.replace_latest_fn(err.extras.category, "comments")
+									]);
+									break;
+								case "upvoted":
+								case "downvoted":
+								case "hidden":
+									await user.replace_latest_fn(err.extras.category, "posts");
+									break;
+								default:
+									break;
 							}
+							await sql.update_user(user.username, {
+								category_sync_info: JSON.stringify(user.category_sync_info)
+							});
+						} catch (err) {
+							console.error(err);
+							logger.error(`user (${username}) replace_latest_fn error (${err})`);
 						}
 					}
 				}
@@ -714,6 +720,7 @@ async function update_all(io) {
 					await new Promise(resolve => setTimeout(resolve, wait_ms));
 				}
 			} while (should_retry);
+			if (retry_count >= 3) console.log(`user (${username}) skipped after ${retry_count} rate limit retries`);
 		}
 	} finally {
 		update_all_completed = true;
