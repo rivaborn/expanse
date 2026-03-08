@@ -496,7 +496,7 @@
 	{/if}
 	<span>viewing: <b>u/{view_username}</b>{#if !is_own_data} <small class="text-muted">(read-only)</small>{/if}</span>
 	<br/>
-	{#if view_user_is_syncing}
+	{#if last_updated_epoch}
 		<span>last synced: <b bind:this={last_updated_wrapper_1} id="last_updated_wrapper_1">?</b> ago</span>
 		<br/>
 		<small bind:this={last_updated_wrapper_2} class="d-none">?</small>
