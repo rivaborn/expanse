@@ -643,7 +643,7 @@ async function update_all(io) {
 				try {
 					user = await get(username);
 
-					if (user.last_updated_epoch && utils.now_epoch() - user.last_updated_epoch >= 30) {
+					if (!user.last_updated_epoch || utils.now_epoch() - user.last_updated_epoch >= 30) {
 						const pre_update_category_sync_info = JSON.parse(JSON.stringify(user.category_sync_info));
 
 						await user.update();
@@ -667,7 +667,7 @@ async function update_all(io) {
 						if (err.statusCode === 429 && err.response?.headers?.['x-ratelimit-reset']) {
 							ratelimit_wait_until = Date.now() + (Number(err.response.headers['x-ratelimit-reset']) * 1000) + 5000;
 							should_retry = true;
-						} else if (err.name === 'RateLimitError' && user?.requester?.ratelimitExpiration) {
+						} else if (err.constructor.name === 'RateLimitError' && user?.requester?.ratelimitExpiration) {
 							ratelimit_wait_until = user.requester.ratelimitExpiration + 5000;
 							should_retry = true;
 						}
