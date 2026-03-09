@@ -553,6 +553,12 @@ class User {
 		delete this.sub_icon_urls_to_get;
 		delete this.imported_fns_to_delete;
 	}
+	_format_item_counts() {
+		const ids = this.new_data?.category_item_ids ?? {};
+		return ['saved','created','upvoted','downvoted','hidden']
+			.map(c => `${c[0].toUpperCase()}${c.slice(1)} (${ids[c]?.size ?? 0})`)
+			.join(', ');
+	}
 	async renew_comment(comment_id) {
 		const requester = reddit.create_requester(cryptr.decrypt(this.reddit_api_refresh_token_encrypted));
 		
