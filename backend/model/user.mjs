@@ -700,7 +700,7 @@ async function update_all(io) {
 						should_retry = (++retry_count < 3);
 					}
 
-					if (err.statusCode == 403 && err.options.qs.before) {
+					if ((err.statusCode == 403 || err.statusCode == 404) && err.options?.qs?.before) {
 						try {
 							switch (err.extras.category) {
 								case "saved":
@@ -741,7 +741,23 @@ async function update_all(io) {
 					await new Promise(resolve => setTimeout(resolve, wait_ms));
 				}
 			} while (should_retry);
-			if (retry_count >= 3) console.log(`user (${username}) skipped after ${retry_count} rate limit retries`);
+			if (retry_count >= 3) {
+				console.log(`user (${username}) skipped after ${retry_count} rate limit retries`);
+				if (user.new_data && Object.keys(user.new_data.items).length > 0) {
+					try {
+						await user.get_new_item_icon_urls();
+						await sql.insert_data(user.username, user.new_data);
+						await sql.delete_imported_fns([...user.imported_fns_to_delete]);
+						await sql.update_user(user.username, {
+							category_sync_info: JSON.stringify(user.category_sync_info),
+							last_updated_epoch: user.last_updated_epoch = utils.now_epoch()
+						});
+						console.log(`user (${username}) partial save - ${user._format_item_counts()}`);
+					} catch (saveErr) {
+						console.error(saveErr);
+					}
+				}
+			}
 		}
 	} finally {
 		update_all_completed = true;
