@@ -422,17 +422,20 @@ class User {
 		r_subs = r_subs.filter((s) => !cached.has(s));
 		u_subs = u_subs.filter((s) => !cached.has(s));
 
+		if (r_subs.length > 0 || u_subs.length > 0) console.log(`icon fetch: ${r_subs.length} r/ subs, ${u_subs.length} u/ subs (${cached.size} cached)`);
 		(r_subs.length != 0 ? await this.request_item_icon_urls("r/", r_subs) : null);
 		(u_subs.length != 0 ? await this.request_item_icon_urls("u/", u_subs) : null);
 	}
 	async update(io=null, socket_id=null, is_retry=false) {
-		console.log(`updating user (${this.username})`);
-
 		let progress = (io ? 0 : null);
 		const complete = (io ? 7 : null);
 
 		this.requester = reddit.create_requester(cryptr.decrypt(this.reddit_api_refresh_token_encrypted));
 		this.me = await this.requester.getMe();
+		const rl_rem = this.requester.ratelimitRemaining ?? '?';
+		const rl_reset = this.requester.ratelimitExpiration ? Math.ceil((this.requester.ratelimitExpiration - Date.now()) / 1000) : '?';
+		const update_start = Date.now();
+		console.log(`updating user (${this.username}) - ratelimit ${rl_rem} remaining, resets in ${rl_reset}s`);
 
 		if (!is_retry) {
 			this.new_data = {
@@ -547,7 +550,7 @@ class User {
 			last_updated_epoch: this.last_updated_epoch = utils.now_epoch()
 		});
 		(io ? io.to(socket_id).emit("update progress", ++progress, complete) : null);
-		console.log(`updated user (${this.username}) - ${this._format_item_counts()}`);
+		console.log(`updated user (${this.username}) in ${Math.ceil((Date.now() - update_start) / 1000)}s - ${this._format_item_counts()}`);
 
 		delete this.new_data;
 		delete this.sub_icon_urls_to_get;
@@ -651,6 +654,7 @@ async function get(username, existence_check=false) {
 }
 
 async function update_all(io) {
+	const cycle_start = Date.now();
 	console.log("update all started");
 	update_all_completed = false;
 
@@ -694,14 +698,17 @@ async function update_all(io) {
 
 					if (err.statusCode === 429 && err.response?.headers?.['x-ratelimit-reset']) {
 						ratelimit_wait_until = Date.now() + (Number(err.response.headers['x-ratelimit-reset']) * 1000) + 5000;
-						should_retry = (++retry_count < 3);
+						should_retry = true;
+						retry_count++;
 					} else if (err.constructor.name === 'RateLimitError' && user?.requester?.ratelimitExpiration) {
 						ratelimit_wait_until = user.requester.ratelimitExpiration + 5000;
-						should_retry = (++retry_count < 3);
+						should_retry = true;
+						retry_count++;
 					}
 
 					if ((err.statusCode == 403 || err.statusCode == 404) && err.options?.qs?.before) {
 						try {
+							console.log(`user (${username}) cursor reset for ${err.extras?.category} (${err.statusCode})`);
 							switch (err.extras.category) {
 								case "saved":
 									await user.replace_latest_fn(err.extras.category, "mixed");
@@ -732,7 +739,7 @@ async function update_all(io) {
 				const now = Date.now();
 				if (ratelimit_wait_until > now) {
 					const wait_ms = ratelimit_wait_until - now;
-					console.log(`rate limit hit, waiting ${Math.ceil(wait_ms / 1000)}s for reset`);
+					console.log(`rate limit hit (retry ${retry_count}), waiting ${Math.ceil(wait_ms / 1000)}s for reset`);
 					await new Promise(resolve => setTimeout(resolve, wait_ms));
 					ratelimit_wait_until = 0;
 				} else if (!should_retry && user?.requester?.ratelimitRemaining < 50 && user?.requester?.ratelimitExpiration > now) {
@@ -741,27 +748,12 @@ async function update_all(io) {
 					await new Promise(resolve => setTimeout(resolve, wait_ms));
 				}
 			} while (should_retry);
-			if (retry_count >= 3) {
-				console.log(`user (${username}) skipped after ${retry_count} rate limit retries`);
-				if (user.new_data && Object.keys(user.new_data.items).length > 0) {
-					try {
-						await user.get_new_item_icon_urls();
-						await sql.insert_data(user.username, user.new_data);
-						await sql.delete_imported_fns([...user.imported_fns_to_delete]);
-						await sql.update_user(user.username, {
-							category_sync_info: JSON.stringify(user.category_sync_info),
-							last_updated_epoch: user.last_updated_epoch = utils.now_epoch()
-						});
-						console.log(`user (${username}) partial save - ${user._format_item_counts()}`);
-					} catch (saveErr) {
-						console.error(saveErr);
-					}
-				}
-			}
+			if (retry_count > 0) console.log(`user (${username}) completed after ${retry_count} rate limit retries`);
 		}
 	} finally {
 		update_all_completed = true;
-		console.log("update all completed");
+		const cycle_ms = Date.now() - cycle_start;
+		console.log(`update all completed in ${Math.floor(cycle_ms / 60000)}m ${Math.floor((cycle_ms % 60000) / 1000)}s`);
 	}
 }
 function cycle_update_all(io) {
