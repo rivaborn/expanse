@@ -310,11 +310,12 @@ async function insert_data(username, data) {
 		prepared_statements[2].values.push(icon_url_key, icon_url_value);
 	}
 
-	for (const statement of prepared_statements) {
+	const nonempty_statements = prepared_statements.filter(s => s.values.length > 0);
+	for (const statement of nonempty_statements) {
 		statement.text[1] = statement.text[1].join(", ");
 		statement.text = statement.text.join(" ");
 	}
-	await transaction(prepared_statements);
+	await transaction(nonempty_statements);
 }
 
 async function get_data(username, filter, item_count, offset) {

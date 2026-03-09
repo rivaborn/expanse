@@ -730,6 +730,13 @@ async function update_all(io) {
 							await sql.update_user(user.username, {
 								category_sync_info: JSON.stringify(user.category_sync_info)
 							});
+							if (user.new_data && Object.keys(user.new_data.items).length > 0) {
+								await sql.insert_data(user.username, user.new_data);
+								await sql.update_user(user.username, {
+									last_updated_epoch: (user.last_updated_epoch = utils.now_epoch())
+								});
+								console.log(`user (${username}) partial save after cursor reset - ${user._format_item_counts()}`);
+							}
 						} catch (err) {
 							console.error(err);
 							logger.error(`user (${username}) replace_latest_fn error (${err})`);
