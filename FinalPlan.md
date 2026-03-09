@@ -22,7 +22,7 @@ This document covers two sessions of work on Expanse:
 
 **Session 1:** Added **Data Review Mode** — allowing any visitor to browse stored Reddit data for any user in the database without requiring Reddit authentication. Write operations remain gated behind authentication. An existing PostgreSQL database was migrated from another server, and the application was prepared for Docker deployment.
 
-**Session 2:** Fixed the **background sync cycle** — resolving a series of bugs that caused users to go days without updates, made logging more informative, and ensured heavy users like `rivaborn` (with large saved histories) eventually complete a successful sync.
+**Session 2:** Fixed the **background sync cycle** — resolving a series of bugs that caused users to go days without updates, made logging more informative, and ensured heavy users (with large saved histories) eventually complete a successful sync.
 
 ---
 
@@ -303,7 +303,7 @@ The user had an existing Expanse installation on another server with a PostgreSQ
 - File: `expanse_backup.sql` (7.6MB, plain SQL format)
 - Restore command:
   ```bash
-  PGPASSWORD=pg psql -h localhost -p 5432 -U pg -d db -f expanse_backup.sql
+  PGPASSWORD=[db_password] psql -h localhost -p 5432 -U [db_user] -d db -f expanse_backup.sql
   ```
 - Result:
   - 20,515 items
@@ -477,8 +477,8 @@ svelte.onMount(async () => {
 A new remote was added and three commits were pushed:
 
 ```bash
-git remote add rivaborn https://github.com/rivaborn/expanse.git
-git push rivaborn main
+git remote add origin https://github.com/[owner]/expanse.git
+git push origin main
 ```
 
 ### Commits Pushed
@@ -511,7 +511,7 @@ Two services:
 
 1. Clone the repository:
    ```bash
-   git clone https://github.com/rivaborn/expanse.git && cd expanse
+   git clone https://github.com/[owner]/expanse.git && cd expanse
    ```
 
 2. Create `backend/.env_prod` with required variables:
@@ -547,7 +547,7 @@ Two services:
 
 ### Context
 
-After deployment, users were showing "last synced" timestamps hours or days old despite `UPDATE_CYCLE_INTERVAL=60`. Heavy users like `rivaborn` and `damaginator1` (large saved histories) never completed a successful sync. The following bugs were identified and fixed across multiple iterations.
+After deployment, users were showing "last synced" timestamps hours or days old despite `UPDATE_CYCLE_INTERVAL=60`. Heavy users with large saved histories never completed a successful sync. The following bugs were identified and fixed across multiple iterations.
 
 ---
 
@@ -622,7 +622,7 @@ console.error = (...args) => _console_error(new Date().toISOString(), ...args);
 
 ### Bug 7: Rate-Limited Users Stuck in Infinite Retry Loop
 
-**Problem:** A user with a very large saved history (e.g. `damaginator1`) exhausted the full 1000-request rate limit budget on every attempt. With no retry cap, the sync cycle was permanently stuck on that user, blocking all others.
+**Problem:** A user with a very large saved history exhausted the full 1000-request rate limit budget on every attempt. With no retry cap, the sync cycle was permanently stuck on that user, blocking all others.
 
 **Fix:** Added a `retry_count` variable. `should_retry` is set to `(++retry_count < 3)` — after 3 consecutive rate-limit hits, the user is skipped for the current cycle with a log entry: `user (X) skipped after 3 rate limit retries`.
 
@@ -673,9 +673,9 @@ Saved (5), Created (20), Upvoted (15), Downvoted (25), Hidden (55)
 This is logged after each category's sync+import completes and on the final "updated user" line, giving visibility into incremental progress per session:
 
 ```
-2026-03-08T20:40:05.711Z rivaborn upvoted done - Saved (0), Created (0), Upvoted (20), Downvoted (0), Hidden (0)
-2026-03-08T20:40:05.900Z rivaborn saved done - Saved (85), Created (0), Upvoted (20), Downvoted (0), Hidden (0)
-2026-03-08T20:40:05.945Z updated user (rivaborn) - Saved (85), Created (12), Upvoted (20), Downvoted (3), Hidden (0)
+2026-03-08T20:40:05.711Z user_a upvoted done - Saved (0), Created (0), Upvoted (20), Downvoted (0), Hidden (0)
+2026-03-08T20:40:05.900Z user_a saved done - Saved (85), Created (0), Upvoted (20), Downvoted (0), Hidden (0)
+2026-03-08T20:40:05.945Z updated user (user_a) - Saved (85), Created (12), Upvoted (20), Downvoted (3), Hidden (0)
 ```
 
 **File:** `backend/model/user.mjs`
