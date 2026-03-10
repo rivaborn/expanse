@@ -10,9 +10,10 @@
 6. [Push to Remote](#6-push-to-remote)
 7. [Docker Deployment](#7-docker-deployment)
 8. [Background Sync Fixes](#8-background-sync-fixes)
-9. [Tech Stack](#9-tech-stack)
-10. [Files Modified](#10-files-modified)
-11. [Commit History](#11-commit-history)
+9. [Session 3: Sync Data Loss Fixes](#9-session-3-sync-data-loss-fixes)
+10. [Tech Stack](#10-tech-stack)
+11. [Files Modified](#11-files-modified)
+12. [Commit History](#12-commit-history)
 
 ---
 
@@ -23,6 +24,8 @@ This document covers two sessions of work on Expanse:
 **Session 1:** Added **Data Review Mode** — allowing any visitor to browse stored Reddit data for any user in the database without requiring Reddit authentication. Write operations remain gated behind authentication. An existing PostgreSQL database was migrated from another server, and the application was prepared for Docker deployment.
 
 **Session 2:** Fixed the **background sync cycle** — resolving a series of bugs that caused users to go days without updates, made logging more informative, and ensured heavy users (with large saved histories) eventually complete a successful sync.
+
+**Session 3:** Fixed **sync data loss bugs** — resolved a silent SQL failure that discarded items when all sub icons were cached, saved partial data when a 404 cursor reset occurred mid-sync, and fixed a cursor advancement bug that permanently skipped items saved since the last successful sync.
 
 ---
 
@@ -682,7 +685,84 @@ This is logged after each category's sync+import completes and on the final "upd
 
 ---
 
-## 9. Tech Stack
+## 9. Session 3: Sync Data Loss Fixes
+
+### Bug 11: Silent SQL Failure When All Sub Icons Are Cached
+
+**Root cause:** `insert_data()` always builds three INSERT statements (for `item`, `user_item`, and `item_sub_icon_url` tables). When all subreddit icons for the synced items are already in the cache, `data.item_sub_icon_urls` is empty. The third statement's VALUES clause is empty, producing invalid SQL: `INSERT INTO item_sub_icon_url VALUES  ON CONFLICT ...`. The `transaction()` function caught the error internally (rollback + `console.error`) without rethrowing, so `insert_data()` returned normally. The caller then set `last_updated_epoch` as if the sync succeeded, but the entire transaction was rolled back — items were silently discarded.
+
+**Fix:** Filter out statements with no values before executing.
+
+```javascript
+const nonempty_statements = prepared_statements.filter(s => s.values.length > 0);
+for (const statement of nonempty_statements) { ... }
+await transaction(nonempty_statements);
+```
+
+**File:** `backend/model/sql.mjs`
+
+---
+
+### Bug 12: Partial Data Discarded After 404 Cursor Reset
+
+**Root cause:** When a stale pagination cursor causes a 404, `user.update()` throws and the outer catch block handles it (cursor reset + `should_retry = false`). Because `insert_data()` and the `last_updated_epoch` update are inside `update()` after the `Promise.all`, they are never reached. For users with large saved histories (e.g. hundreds of items fetched across many rate-limit retries), all accumulated items were discarded every cycle. The user's `last_updated_epoch` was never updated, so the next cycle started from scratch — creating an infinite loop.
+
+**Fix:** After the cursor reset, if `new_data` has items, save them and update `last_updated_epoch`.
+
+```javascript
+if (user.new_data && Object.keys(user.new_data.items).length > 0) {
+    await sql.insert_data(user.username, user.new_data);
+    await sql.update_user(user.username, {
+        last_updated_epoch: (user.last_updated_epoch = utils.now_epoch())
+    });
+    console.log(`user (${username}) partial save after cursor reset - ${user._format_item_counts()}`);
+}
+```
+
+**File:** `backend/model/user.mjs`
+
+---
+
+### Bug 13: 404 Cursor Reset Jumped Past Missing Items
+
+**Root cause:** On a 404, `replace_latest_fn()` was called to reset the cursor. This fetched the current newest saved item from Reddit and set `latest_fn_mixed` to it. The next sync used `before: newest_item` — meaning it only looked for items saved *after* that point. All items saved between the old stale cursor and the new cursor (potentially weeks of saves) were permanently skipped. This affected all categories and all users.
+
+**Fix:** On 404, null out the cursor instead of advancing it to the current newest. A null cursor causes the next sync to start from the top and paginate backwards, recovering all missing items. `ON CONFLICT DO NOTHING` handles any duplicates safely.
+
+```javascript
+case "saved":
+    user.category_sync_info.saved.latest_fn_mixed = null;
+    break;
+case "created":
+    user.category_sync_info.created.latest_fn_posts = null;
+    user.category_sync_info.created.latest_fn_comments = null;
+    break;
+case "upvoted":
+case "downvoted":
+case "hidden":
+    user.category_sync_info[err.extras.category].latest_fn_posts = null;
+    break;
+```
+
+**File:** `backend/model/user.mjs`
+
+**One-time DB recovery:** All existing users' cursors were also reset to null via a direct SQL UPDATE to recover items already in the gap:
+
+```sql
+UPDATE user_
+SET category_sync_info = (
+    category_sync_info::jsonb
+    || jsonb_build_object('saved', (category_sync_info::jsonb->'saved') || '{"latest_fn_mixed": null}')
+    || jsonb_build_object('created', (category_sync_info::jsonb->'created') || '{"latest_fn_posts": null, "latest_fn_comments": null}')
+    || jsonb_build_object('upvoted', (category_sync_info::jsonb->'upvoted') || '{"latest_fn_posts": null}')
+    || jsonb_build_object('downvoted', (category_sync_info::jsonb->'downvoted') || '{"latest_fn_posts": null}')
+    || jsonb_build_object('hidden', (category_sync_info::jsonb->'hidden') || '{"latest_fn_posts": null}')
+);
+```
+
+---
+
+## 10. Tech Stack
 
 | Layer          | Technology                                      |
 |----------------|------------------------------------------------|
@@ -697,13 +777,13 @@ This is logged after each category's sync+import completes and on the final "upd
 
 ---
 
-## 10. Files Modified
+## 11. Files Modified
 
 | File | Description |
 |------|-------------|
 | `backend/controller/server.mjs` | New `/get_users` endpoint, `"set view user"` socket event, renamed socket properties, write handler guards, ISO timestamp injection for all console output |
-| `backend/model/user.mjs` | New `/get_users` endpoint, `"set view user"` socket event, renamed socket properties, write handler guards; sync cycle halting fix; dynamic rate limit backoff; `err.constructor.name` fix; retry loop with max 3 retries; user fetched once before retry loop; `is_retry` parameter to preserve `new_data`; `_format_item_counts()` helper; per-category completion logs |
-| `backend/model/sql.mjs` | New `get_all_non_purged_users()`, dev table drop safety gate (`DEV_DROP_TABLES`), new `get_cached_sub_icons()` to filter already-cached icon subs |
+| `backend/model/user.mjs` | New `/get_users` endpoint, `"set view user"` socket event, renamed socket properties, write handler guards; sync cycle halting fix; dynamic rate limit backoff; `err.constructor.name` fix; retry loop with max 3 retries; user fetched once before retry loop; `is_retry` parameter to preserve `new_data`; `_format_item_counts()` helper; per-category completion logs; partial data save on cursor reset; null cursor on 404 instead of jumping to latest |
+| `backend/model/sql.mjs` | New `get_all_non_purged_users()`, dev table drop safety gate (`DEV_DROP_TABLES`), new `get_cached_sub_icons()` to filter already-cached icon subs; skip empty INSERT statements to prevent silent SQL failure |
 | `frontend/source/routes/index.svelte` | Dual API calls in `load()`, module-to-instance variable bridging, `"set view user"` dispatch handler |
 | `frontend/source/components/landing.svelte` | User picker dropdown with online status, immediate dispatch on view |
 | `frontend/source/components/access.svelte` | `auth_username`/`view_username` props, `is_own_data` reactive flag, user switcher, awaited `"set view user"` on mount, conditional write buttons, removed login button; "last synced" shown for all users regardless of online status |
@@ -714,7 +794,7 @@ This is logged after each category's sync+import completes and on the final "upd
 
 ---
 
-## 11. Commit History
+## 12. Commit History
 
 | Hash | Message |
 |------|---------|
@@ -734,3 +814,8 @@ This is logged after each category's sync+import completes and on the final "upd
 | `aa3f78a` | Skip icon fetches for subs already in DB cache |
 | `d101708` | Preserve accumulated items across rate-limit retries |
 | `6c654c1` | Log per-category download counts during user sync |
+| `7a607db` | Fix missing _format_item_counts method definition |
+| `46b041f` | Fix stale cursor 404 and save partial progress on rate limit skip |
+| `f5abc4f` | Remove retry skip limit and improve sync logging |
+| `0e3e209` | Fix silent SQL failure and save partial data on cursor reset |
+| `2d850f5` | On 404 cursor reset, null out cursor instead of jumping to latest |
