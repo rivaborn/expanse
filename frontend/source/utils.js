@@ -14,17 +14,17 @@ function epoch_to_formatted_datetime(epoch) {
 function time_since(epoch) {
 	const epoch_diff = now_epoch() - epoch;
 	if (epoch_diff/31536000 >= 1) {
-		return Math.floor(epoch_diff/31536000)+"y";
+		return Math.floor(epoch_diff/31536000)+" Years";
 	} else if (epoch_diff/2592000 >= 1) {
-		return Math.floor(epoch_diff/2592000)+"m";
+		return Math.floor(epoch_diff/2592000)+" Months";
 	} else if (epoch_diff/86400 >= 1) {
-		return Math.floor(epoch_diff/86400)+"d";
+		return Math.floor(epoch_diff/86400)+" Days";
 	} else if (epoch_diff/3600 >= 1) {
-		return Math.floor(epoch_diff/3600)+"h";
+		return Math.floor(epoch_diff/3600)+" Hours";
 	} else if (epoch_diff/60 >= 1) {
-		return Math.floor(epoch_diff/60)+"m";
+		return Math.floor(epoch_diff/60)+" Minutes";
 	} else {
-		return epoch_diff+"s";
+		return epoch_diff+" Seconds";
 	}
 }
 
