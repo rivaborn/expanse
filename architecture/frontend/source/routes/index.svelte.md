@@ -1,47 +1,55 @@
 # index.svelte - Main Page Router
 
 ## Overview
-The main page component that handles authentication checking, user listing, and routing between Landing, Loading, and Access pages.
+The main page component that handles authentication checking, user listing, and routing between Landing, Loading, and Access pages. Acts as the top-level controller for the SPA.
 
 ## Module Scope
+Imports: `globals`, `Landing`, `Loading`, `Access`, `svelte`, `axios`. Reads `globals.readonly` into `globals_r`.
 
-### Variables
-- `_auth_username` (string|null) - Authenticated user's Reddit username (module-level, set in load)
-- `_view_username` (string|null) - Username being viewed (module-level, defaults to auth_username)
-- `_available_users` (array) - All non-purged usernames from database
-- `_online_users` (array) - Usernames currently syncing (have active socket connections)
+### Module-level Variables
+- `_auth_username` (string|null) - Authenticated user's Reddit username. Set in `load()`.
+- `_view_username` (string|null) - Username being viewed. Defaults to `_auth_username`.
+- `_available_users` (array) - All non-purged usernames from database. Set in `load()`.
+- `_online_users` (array) - Usernames currently online/syncing. Set in `load()`.
 
-**Note:** Module-level variables prefixed with `_` are NOT reactive in Svelte. They're copied to instance-level reactive variables.
+**Note:** These `_` prefixed module-level variables are NOT reactive in Svelte. They are used only to pass initial values to instance-level reactive variables.
 
 ### `load(obj)` (SvelteKit load function)
-Makes two parallel requests:
-1. `GET /authentication_check?socket_id=...` - Returns auth status and which page to show
-2. `GET /get_users` - Returns available usernames and online usernames
+Makes two parallel requests via `Promise.all`:
+1. `GET /authentication_check?socket_id={globals_r.socket.id}` - Returns `{username, use_page}` (or `{use_page: "landing"}` if unauthenticated)
+2. `GET /get_users` - Returns `{usernames, online_usernames}`
 
-Sets module-level variables and returns `use_page` prop.
+Sets the four module-level `_` variables and returns `{status: 200, props: {use_page}}`.
 
-Error handling: 401 → backend deserialize error, 503 → request failed.
+Error handling:
+- If error message ends with `401`: backend `deserializeUser` failure, returns `{status: 401}`
+- Otherwise: request failure, returns `{status: 503}`
 
 ## Instance Scope
 
 ### Props
-- `use_page` (string) - "landing", "loading", or "access"
+- `use_page` (string) - `"landing"`, `"loading"`, or `"access"` — determines initial page
 
 ### Variables
-- `active_page` (Component) - Currently active Svelte component
+- `active_page` (Svelte Component) - Currently rendered page component. Set by initial switch and `handle_component_dispatch`.
 - `auth_username` (string|null) - Reactive copy of `_auth_username`
 - `view_username` (string|null) - Reactive copy of `_view_username`
 - `available_users` (array) - Reactive copy of `_available_users`
 - `online_users` (array) - Reactive copy of `_online_users`
 
 ### `handle_component_dispatch(evt)`
-Handles dispatch events from child components:
-- `"switch page to loading"` → sets active_page to Loading
-- `"switch page to access"` → sets active_page to Access
-- `"set view user"` → sets view_username and switches to Access
+Handles `"dispatch"` events from child components. Reads `evt.detail.action || evt.detail` (handles both object and string payloads):
+- `"switch page to loading"` → sets `active_page = Loading`
+- `"switch page to access"` → sets `active_page = Access`
+- `"set view user"` → sets `view_username = evt.detail.username`, sets `active_page = Access`
+
+### Initial page routing (runs at instance creation, not in lifecycle hooks)
+Switch on `use_page`: sets `active_page` to `Landing`, `Loading`, or `Access`.
 
 ### `onMount`
-Cleans up Reddit OAuth callback URL hash (`/#_`). Emits `"route" "index"` socket event.
+- If `window.location.href` ends with `"/#_"` (Reddit OAuth callback artifact): calls `window.history.pushState` to strip it
+- Emits `"route" "index"` socket event
 
 ## Template
-Uses `<svelte:component>` to dynamically render the active page, passing all props.
+- `<svelte:head>`: sets `<title>` to `globals_r.app_name`, meta description to `globals_r.description`
+- `<svelte:component this={active_page}>`: dynamically renders the active page, passing `on:dispatch`, `auth_username`, `view_username`, `available_users`, `online_users` as props

@@ -6,18 +6,21 @@ The main server file that sets up Express HTTP server, Socket.IO real-time commu
 ## Imports
 - `socket.io` - WebSocket server for real-time bidirectional communication
 - `express` - HTTP framework
+- `http` - Node.js HTTP module (used to create server from express app)
 - `cookie-session` - Session management via signed cookies
 - `passport` / `passport-reddit` - Reddit OAuth2 authentication strategy
-- `crypto` - Node.js crypto (available but not actively used)
-- `fs` - File system operations (for temp file cleanup)
+- `crypto` - Node.js crypto (imported but not actively used in routes)
+- `fs` - File system operations (for temp file cleanup after download)
 - `express-fileupload` - Multipart file upload handling
 - Internal modules: `file`, `sql`, `user`, `utils`
 
 ## Configuration
-- `allowed_users` (Set) - Usernames allowed to use the app (from `ALLOWED_USERS` env var). `"*"` means all users allowed.
+- `allowed_users` (Set) - Usernames allowed to use the app (from `ALLOWED_USERS` env var, comma-space separated). `"*"` means all users allowed.
 - `denied_users` (Set) - Usernames explicitly denied (from `DENIED_USERS` env var). `"*"` means all users denied.
-- Socket.IO `maxHttpBufferSize`: 1MB
-- Cookie session: 30-day expiry, httpOnly, sameSite: "lax", rolling expiry
+- Console.log/error are patched at startup to prepend ISO timestamp to all log messages.
+- Socket.IO `maxHttpBufferSize`: 1MB. CORS `origin: "*"` in dev mode, none in prod.
+- Cookie session: 30-day expiry, httpOnly, sameSite: "lax", rolling expiry (timestamp updated on each request).
+- File upload limit: 50MB per file.
 
 ## Startup Sequence
 1. `file.init()` - Create required directories
@@ -26,72 +29,99 @@ The main server file that sets up Express HTTP server, Socket.IO real-time commu
 4. `user.fill_usernames_to_socket_ids()` - Load all non-purged usernames
 5. `user.cycle_update_all(io)` - Start background sync cycle
 
+## Middleware Stack (in order)
+1. `express-fileupload` (50MB limit)
+2. `express.static` - Serves frontend build from `{frontend}/build/`
+3. Error handler (registered via `process.nextTick` - runs after deserialization): Destroys session and sends 401 on `deserializeUser` errors.
+4. `express.urlencoded` - Parses URL-encoded bodies
+5. `cookie-session` - Session cookie management
+6. Rolling session middleware - Updates `req.session.nowInMinutes` on every request
+7. `passport.initialize()`
+8. `passport.session()`
+
+## Passport Configuration
+- `RedditStrategy` - Handles compatibility for different passport-reddit export formats
+- Verify callback: Creates `User(username, refresh_token)`, calls `u.save()`, then calls `done(null, u)`
+- `serializeUser`: Stores `u.username` in session
+- `deserializeUser`: Calls `user.get(username)` to reconstruct User from DB
+
+## Access Control (in `/callback`)
+User is denied if any of these conditions is true:
+1. All users allowed (`allowed_users` has `"*"`) AND user is explicitly denied
+2. Not all users allowed AND user is not in the allowlist
+3. All users denied (`denied_users` has `"*"`) AND user is not in the allowlist
+
+Denied users have their data purged and are redirected to `/logout`.
+
 ## HTTP Routes
 
 ### `GET /login`
 Initiates Reddit OAuth2 flow with `duration: "permanent"` for refresh tokens.
 
 ### `GET /callback`
-OAuth2 callback handler. Checks user against allowed/denied lists. If denied, purges user data. If allowed, logs in and redirects to `/`.
+OAuth2 callback handler. Checks user against allowed/denied lists. If denied, purges user data and redirects to `/logout`. If allowed, logs in via `req.login()` and redirects to `/`.
 
 ### `GET /get_users`
-**No auth required.** Returns all non-purged usernames and which are currently online (have active socket connections). Used for data review mode.
+**No auth required.** Returns `{usernames, online_usernames}` - all non-purged usernames and which are currently online (have non-null socket IDs in `usernames_to_socket_ids`).
 
 ### `GET /authentication_check`
-Checks if request is authenticated. If yes, maps socket_id to username and returns `use_page` ("access" for returning users, "loading" for new users). If not authenticated, returns `use_page: "landing"`.
+Checks if request is authenticated. If yes, maps `socket_id` (from query param) to username in both direction maps and returns `{username, use_page}` where `use_page` is `"access"` for returning users (have `last_updated_epoch`) or `"loading"` for new users. If not authenticated, returns `{use_page: "landing"}`.
 
 ### `POST /upload`
-**Auth required.** Handles CSV file upload for Reddit data import. Accepts: saved_posts, saved_comments, posts, comments, post_votes, hidden_posts.
+**Auth required.** Handles CSV file upload for Reddit data import. Accepts fields named: `saved_posts`, `saved_comments`, `posts`, `comments`, `post_votes`, `hidden_posts`. Calls `file.parse_import()` asynchronously (does not await) and immediately ends the response.
 
 ### `GET /download`
-**Auth required.** Serves JSON export file and deletes it after download.
+**Auth required.** Serves `tempfiles/{filename}.json` as a download and deletes the file afterward.
 
 ### `GET /logout`
-Destroys session and redirects to `/`.
+**Auth required.** Calls `req.logout()` and redirects to `/`. Returns 401 if not authenticated.
 
 ### `DELETE /purge`
-**Auth required + socket_id verification.** Purges all user data from database.
+**Auth required + socket_id verification** (query param `socket_id` must match stored socket ID for the user). Calls `req.user.purge()`, then `req.logout()`. Returns `"success"` or `"error"`.
 
 ### `* (catch-all)`
-Returns 404 with the SPA index.html.
+Returns 404 with the SPA `index.html`.
 
 ## Socket.IO Events
 
 ### `"route"` (route)
-Client notifies current route. Currently no-op (switch with empty cases).
+Client notifies current route. Currently no-op (switch with empty cases for `"index"` and default).
 
 ### `"set view user"` (username)
-Sets which user's data the socket is viewing. Leaves previous view room, validates user exists, joins `view:<username>` room. Responds with `"view user set"` containing username, online status, and last_updated_epoch.
+Sets which user's data the socket is viewing. Leaves previous `view:{username}` room if any. Validates user exists via `user.get()`. Joins `view:{username}` room. Responds with `"view user set"` containing `{username, is_online, last_updated_epoch}` on success, or `{error: "user not found"}` on failure.
 
 ### `"page"` (page)
 - `"landing"`: no-op
-- `"loading"`: Sets `socket.auth_username`, triggers initial data sync via `user.update(io, socket_id)`
-- `"access"`: Sets `socket.auth_username`, sends last_updated_epoch, updates last_active_epoch
+- `"loading"`: Sets `socket.auth_username` from `socket_ids_to_usernames`, calls `user.update(io, socket.id)` to trigger initial sync
+- `"access"`: Sets `socket.auth_username`, emits `"store last updated epoch"` with user's current epoch, updates `last_active_epoch` in DB asynchronously
 
 ### `"get data"` (filter, item_count, offset)
-Queries items for `socket.view_username` with the given filter. Returns items and icon URLs.
+Queries items for `socket.view_username` with the given filter. Emits `"got data"` with items and icon URLs.
 
 ### `"get placeholder"` (filter)
-Returns item count for `socket.view_username` with given filter.
+Returns item count for `socket.view_username` with given filter. Emits `"got placeholder"`.
 
 ### `"get subs"` (filter)
-Returns distinct subreddits for `socket.view_username` with given filter.
+Returns distinct subreddits for `socket.view_username` with given filter. Emits `"got subs"`.
 
 ### `"renew comment"` (comment_id)
-**Auth guard: `socket.auth_username === socket.view_username`.** Re-fetches comment body from Reddit API.
+**Auth guard: `socket.auth_username` must equal `socket.view_username`.** Re-fetches comment body from Reddit API and emits `"renewed comment"` with new content.
 
 ### `"delete item from expanse acc"` (item_id, item_category)
-**Auth guard.** Deletes item from Expanse database only.
+**Auth guard.** Calls `sql.delete_item_from_expanse_acc()` asynchronously.
 
 ### `"delete item from reddit acc"` (item_id, item_category, item_type)
-**Auth guard.** Deletes item from Reddit account (unsave/delete/unvote/unhide).
+**Auth guard.** Calls `user.delete_item_from_reddit_acc()` asynchronously.
 
 ### `"export"`
-**Auth guard.** Creates JSON export file and sends download link.
+**Auth guard.** Calls `file.create_export()`, emits `"download"` with the generated filename.
 
 ### `"disconnect"`
-Cleans up socket-to-username mappings. Sets `usernames_to_socket_ids[username]` to null (not delete, because username is needed in update_all).
+Cleans up socket mappings. Sets `usernames_to_socket_ids[username]` to `null` (not delete, because the key is needed in `update_all`). Deletes `socket_ids_to_usernames[socket.id]`.
 
 ## Socket Properties
-- `socket.auth_username` - The Reddit-authenticated user (from session mapping, may be null)
-- `socket.view_username` - The user whose data is being displayed (set by `"set view user"`)
+- `socket.auth_username` - The Reddit-authenticated user (from session mapping, initialized to null)
+- `socket.view_username` - The user whose data is being displayed (set by `"set view user"`, initialized to null)
+
+## Server Shutdown
+`process.on("beforeExit")` ends the PostgreSQL connection pool.
