@@ -711,18 +711,16 @@ async function update_all(io) {
 							console.log(`user (${username}) cursor reset for ${err.extras?.category} (${err.statusCode})`);
 							switch (err.extras.category) {
 								case "saved":
-									await user.replace_latest_fn(err.extras.category, "mixed");
+									user.category_sync_info.saved.latest_fn_mixed = null;
 									break;
 								case "created":
-									await Promise.all([
-										user.replace_latest_fn(err.extras.category, "posts"),
-										user.replace_latest_fn(err.extras.category, "comments")
-									]);
+									user.category_sync_info.created.latest_fn_posts = null;
+									user.category_sync_info.created.latest_fn_comments = null;
 									break;
 								case "upvoted":
 								case "downvoted":
 								case "hidden":
-									await user.replace_latest_fn(err.extras.category, "posts");
+									user.category_sync_info[err.extras.category].latest_fn_posts = null;
 									break;
 								default:
 									break;
