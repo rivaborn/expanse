@@ -7,8 +7,6 @@ networks:
 services:
     db:
         image: docker.io/postgres:14
-        ports:
-            - "5432:5432"       
         logging:
             driver: "json-file"
             options:
@@ -20,10 +18,17 @@ services:
             - net
         env_file:
             - ./backend/.env_prod
-        restart: on-failure
+        healthcheck:
+            test: ["CMD-SHELL", "pg_isready"]
+            interval: 5s
+            timeout: 5s
+            retries: 10
+            start_period: 10s
+        restart: unless-stopped
     app:
         depends_on:
-            - db
+            db:
+                condition: service_healthy
         build:
             context: .
         image: expanse-oauth-fix-v1:1.0
@@ -45,4 +50,4 @@ services:
             - ./backend/.env_prod
         entrypoint: []
         command: sh -c "wait-for-it db:5432 -t 0 && cd ./backend/ && npm run prod"
-        restart: on-failure
+        restart: unless-stopped
