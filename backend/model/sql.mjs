@@ -228,11 +228,12 @@ async function purge_user(username) {
 
 async function get_all_non_purged_users() {
 	const rows = await query(`
-		select 
-			username 
-		from 
-			user_ 
-		where 
+		select
+			username,
+			last_updated_epoch
+		from
+			user_
+		where
 			reddit_api_refresh_token_encrypted is not null
 		;
 	`);

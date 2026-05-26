@@ -6,9 +6,14 @@ const utils = await import(`${process.env.backend}/model/utils.mjs`);
 
 let update_all_completed = null;
 let ratelimit_wait_until = 0;
+let broadcast_io = null;
 
 const usernames_to_socket_ids = {};
 const socket_ids_to_usernames = {};
+
+function broadcast_users_updated() {
+	(broadcast_io ? broadcast_io.emit("users updated") : null);
+}
 
 class User {
 	constructor(username, refresh_token, dummy=false) {
@@ -550,6 +555,7 @@ class User {
 			last_updated_epoch: this.last_updated_epoch = utils.now_epoch()
 		});
 		(io ? io.to(socket_id).emit("update progress", ++progress, complete) : null);
+		broadcast_users_updated();
 		console.log(`updated user (${this.username}) in ${Math.ceil((Date.now() - update_start) / 1000)}s - ${this._format_item_counts()}`);
 
 		delete this.new_data;
@@ -626,6 +632,7 @@ class User {
 	async purge() {
 		await sql.purge_user(this.username);
 		delete usernames_to_socket_ids[this.username];
+		broadcast_users_updated();
 		console.log(`purged user (${this.username})`);
 	}
 }
@@ -733,6 +740,7 @@ async function update_all(io) {
 								await sql.update_user(user.username, {
 									last_updated_epoch: (user.last_updated_epoch = utils.now_epoch())
 								});
+								broadcast_users_updated();
 								console.log(`user (${username}) partial save after cursor reset - ${user._format_item_counts()}`);
 							}
 						} catch (err) {
@@ -762,6 +770,7 @@ async function update_all(io) {
 	}
 }
 function cycle_update_all(io) {
+	broadcast_io = io;
 	update_all(io).catch((err) => console.error(err));
 
 	setInterval(() => {

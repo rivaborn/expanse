@@ -151,12 +151,16 @@ app.get("/callback", (req, res, next) => {
 app.get("/get_users", async (req, res) => {
 	try {
 		const rows = await sql.get_all_non_purged_users();
-		const usernames = rows.map(r => r.username);
+		const users = rows.map(r => ({
+			username: r.username,
+			last_updated_epoch: (r.last_updated_epoch != null ? Number(r.last_updated_epoch) : null)
+		}));
+		const usernames = users.map(u => u.username);
 		const online_usernames = usernames.filter(u => user.usernames_to_socket_ids[u]);
-		res.send({ usernames, online_usernames });
+		res.send({ usernames, online_usernames, users });
 	} catch (err) {
 		console.error(err);
-		res.send({ usernames: [], online_usernames: [] });
+		res.send({ usernames: [], online_usernames: [], users: [] });
 	}
 });
 

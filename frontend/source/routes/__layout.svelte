@@ -1,5 +1,6 @@
 <script context="module">
 	import * as globals from "frontend/source/globals.js";
+	import UsersTable from "frontend/source/components/users_table.svelte";
 
 	const globals_r = globals.readonly;
 
@@ -38,6 +39,7 @@
 	<div class="row d-flex justify-content-center">
 		<content class="col-12 col-sm-11 col-md-10 col-lg-9 col-xl-8">
 			<slot></slot>
+			<UsersTable/>
 			<div class="text-center my-4 pt-2">
 				<a href={globals_r.repo} target="_blank"><i id="bottom_gh" class="fab fa-github"></i></a>
 			</div>
