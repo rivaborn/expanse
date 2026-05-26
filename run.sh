@@ -1,40 +1,71 @@
-#!/bin/sh
+#!/usr/bin/env bash
+set -e
 
-if [ "$1" = "dev" ]; then
-	if [ "$2" = "audit" ]; then
-		(cd ./backend/ && npm audit)
-		cd ./frontend/ && npm audit
-		return
-	elif [ "$2" = "outdated" ]; then
-		(cd ./backend/ && npm outdated)
-		cd ./frontend/ && npm outdated
-		return
-	elif [ "$2" = "build" ]; then
-		(cd ./backend/ && npm install)
-		(cd ./frontend/ && npm install && npm run build)
-		docker compose -f ./compose.dev.yaml build
-		return
-	elif [ "$2" = "up" ]; then
-		docker compose -f ./compose.dev.yaml up --no-build
-		return
-	fi
-elif [ "$1" = "prod" ]; then
-	if [ "$2" = "up" ]; then
-		if [ "$3" = "--watch" ]; then
-			docker compose -f ./compose.prod.yaml up --build
-			return
-		fi
-		docker compose -f ./compose.prod.yaml up -d --build
-		return
-	elif [ "$2" = "down" ]; then
-		docker compose -f ./compose.prod.yaml down
-		return
-	elif [ "$2" = "update" ]; then
-		sh ./run.sh prod down
-		git pull
-		docker compose -f ./compose.prod.yaml pull
-		docker compose -f ./compose.prod.yaml build
-		sh ./run.sh prod up
-		return
-	fi
-fi
+DEV_COMPOSE=./compose.dev.yaml
+PROD_COMPOSE=./compose.prod.yaml
+
+usage() {
+	cat <<EOF
+Usage:
+    ./run.sh dev audit          npm audit in backend and frontend
+    ./run.sh dev outdated       npm outdated in backend and frontend
+    ./run.sh dev build          install deps, build frontend, build dev image
+    ./run.sh dev up             start dev stack (no rebuild)
+
+    ./run.sh prod up [--watch]  start prod stack (detached unless --watch)
+    ./run.sh prod down          stop prod stack
+    ./run.sh prod build         build prod image
+    ./run.sh prod update        pull, rebuild, restart
+EOF
+	exit 1
+}
+
+case "${1:-}" in
+	dev)
+		case "${2:-}" in
+			audit)
+				(cd ./backend/ && npm audit)
+				(cd ./frontend/ && npm audit)
+				;;
+			outdated)
+				(cd ./backend/ && npm outdated)
+				(cd ./frontend/ && npm outdated)
+				;;
+			build)
+				(cd ./backend/ && npm install)
+				(cd ./frontend/ && npm install && npm run build)
+				docker compose -f "$DEV_COMPOSE" build
+				;;
+			up)
+				docker compose -f "$DEV_COMPOSE" up --no-build
+				;;
+			*) usage ;;
+		esac
+		;;
+	prod)
+		case "${2:-}" in
+			up)
+				if [ "${3:-}" = "--watch" ]; then
+					docker compose -f "$PROD_COMPOSE" up --build
+				else
+					docker compose -f "$PROD_COMPOSE" up -d --build
+				fi
+				;;
+			down)
+				docker compose -f "$PROD_COMPOSE" down
+				;;
+			build)
+				docker compose -f "$PROD_COMPOSE" build
+				;;
+			update)
+				./run.sh prod down
+				git pull
+				docker compose -f "$PROD_COMPOSE" pull
+				docker compose -f "$PROD_COMPOSE" build
+				./run.sh prod up
+				;;
+			*) usage ;;
+		esac
+		;;
+	*) usage ;;
+esac
