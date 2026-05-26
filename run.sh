@@ -60,8 +60,8 @@ case "${1:-}" in
 			update)
 				./run.sh prod down
 				git pull
-				docker compose -f "$PROD_COMPOSE" pull
-				docker compose -f "$PROD_COMPOSE" build
+				docker compose -f "$PROD_COMPOSE" pull --ignore-pull-failures
+				docker compose -f "$PROD_COMPOSE" build --pull
 				./run.sh prod up
 				;;
 			*) usage ;;
