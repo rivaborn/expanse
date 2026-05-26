@@ -87,6 +87,20 @@ async function init_db() {
 		await client.query(`alter table user_item add column if not exists added_epoch bigint;`);
 
 		await client.query(`
+			with ordered as (
+				select
+					ctid,
+					row_number() over (partition by username, category order by ctid) - 1 as idx
+				from user_item
+				where added_epoch is null
+			)
+			update user_item
+			set added_epoch = 315532800 + ordered.idx * 60
+			from ordered
+			where user_item.ctid = ordered.ctid;
+		`);
+
+		await client.query(`
 			create table if not exists 
 				item_sub_icon_url (
 					sub text primary key, 
