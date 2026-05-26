@@ -72,16 +72,19 @@ async function init_db() {
 		`);
 	
 		await client.query(`
-			create table if not exists 
+			create table if not exists
 				user_item (
-					username text not null references user_ (username), 
-					category text not null, 
-					item_id text not null, 
-		
+					username text not null references user_ (username),
+					category text not null,
+					item_id text not null,
+					added_epoch bigint,
+
 					unique (username, category, item_id)
 				)
 			;
 		`);
+
+		await client.query(`alter table user_item add column if not exists added_epoch bigint;`);
 
 		await client.query(`
 			create table if not exists 
@@ -275,19 +278,19 @@ async function insert_data(username, data) {
 		values: []
 	}, {
 		text: [`
-			insert into 
-				user_item 
+			insert into
+				user_item (username, category, item_id, added_epoch)
 			values`,
 				[],
-			`on conflict (username, category, item_id) do 
+			`on conflict (username, category, item_id) do
 				nothing
 			;
 		`],
 		values: []
 	}, {
 		text: [`
-			insert into 
-				item_sub_icon_url 
+			insert into
+				item_sub_icon_url
 			values`,
 				[],
 			`on conflict (sub) do 
@@ -309,12 +312,13 @@ async function insert_data(username, data) {
 		prepared_statements[0].values.push(item_key, item_value.type, item_value.content, item_value.author, item_value.sub, item_value.url, item_value.created_epoch, `${item_value.sub} ${item_value.author} ${item_value.content}`);
 	}
 
+	const insert_data_added_epoch = Math.floor(Date.now() / 1000);
 	for (const category in data.category_item_ids) {
 		for (const item_id of data.category_item_ids[category]) {
 			const value_count = prepared_statements[1].values.length;
-			prepared_statements[1].text[1].push(`($${value_count+1}, $${value_count+2}, $${value_count+3})`);
+			prepared_statements[1].text[1].push(`($${value_count+1}, $${value_count+2}, $${value_count+3}, $${value_count+4})`);
 
-			prepared_statements[1].values.push(username, category, item_id);
+			prepared_statements[1].values.push(username, category, item_id, insert_data_added_epoch);
 		}
 	}
 
@@ -557,11 +561,11 @@ async function parse_import(username, import_data) {
 
 	const prepared_statement_2 = {
 		text: [`
-			insert into 
-				user_item 
+			insert into
+				user_item (username, category, item_id, added_epoch)
 			values`,
 				[],
-			`on conflict (username, category, item_id) do 
+			`on conflict (username, category, item_id) do
 				nothing
 			;
 		`],
@@ -591,6 +595,7 @@ async function parse_import(username, import_data) {
 		prepared_statements[active_ps_idx].values.push(item_id, item_fn_prefix);
 	}
 
+	const parse_import_added_epoch = Math.floor(Date.now() / 1000);
 	for (const category in import_data.category_item_ids) {
 		for (let i = 0; i < import_data.category_item_ids[category].length; i++) {
 			if (i % 1000 == 0) {
@@ -599,10 +604,10 @@ async function parse_import(username, import_data) {
 			}
 
 			const value_count = prepared_statements[active_ps_idx].values.length;
-			prepared_statements[active_ps_idx].text[1].push(`($${value_count+1}, $${value_count+2}, $${value_count+3})`);
+			prepared_statements[active_ps_idx].text[1].push(`($${value_count+1}, $${value_count+2}, $${value_count+3}, $${value_count+4})`);
 
 			const item_id = import_data.category_item_ids[category][i];
-			prepared_statements[active_ps_idx].values.push(username, category, item_id);
+			prepared_statements[active_ps_idx].values.push(username, category, item_id, parse_import_added_epoch);
 		}
 	}
 

@@ -109,6 +109,7 @@ async function create_sqlite_export() {
 				username text not null,
 				category text not null,
 				item_id text not null,
+				added_epoch integer,
 				unique (username, category, item_id)
 			);
 			create table item_sub_icon_url (
@@ -121,7 +122,7 @@ async function create_sqlite_export() {
 			{ name: "user_", cols: ["username", "reddit_api_refresh_token_encrypted", "category_sync_info", "last_updated_epoch", "last_active_epoch"], int_cols: new Set(["last_updated_epoch", "last_active_epoch"]) },
 			{ name: "item", cols: ["id", "type", "content", "author", "sub", "url", "created_epoch"], int_cols: new Set(["created_epoch"]) },
 			{ name: "item_fn_to_import", cols: ["id", "fn_prefix"], int_cols: new Set() },
-			{ name: "user_item", cols: ["username", "category", "item_id"], int_cols: new Set() },
+			{ name: "user_item", cols: ["username", "category", "item_id", "added_epoch"], int_cols: new Set(["added_epoch"]) },
 			{ name: "item_sub_icon_url", cols: ["sub", "url"], int_cols: new Set() }
 		];
 
