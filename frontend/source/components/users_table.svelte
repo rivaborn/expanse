@@ -9,7 +9,6 @@
 </script>
 <script>
 	let users = [];
-	let online_usernames = [];
 	let tick = 0;
 	let tick_interval_id = null;
 
@@ -17,7 +16,6 @@
 		try {
 			const response = await axios.get(`${globals_r.backend}/get_users`);
 			users = response.data.users || [];
-			online_usernames = response.data.online_usernames || [];
 		} catch (err) {
 			console.error(err);
 		}
@@ -25,11 +23,10 @@
 
 	$: rows = (() => {
 		void tick;
-		const online_set = new Set(online_usernames);
 		return users.map((u) => ({
 			username: u.username,
 			when: (u.last_updated_epoch ? `${utils.time_since(u.last_updated_epoch)} ago` : "never"),
-			online: online_set.has(u.username)
+			syncing: !!u.has_token
 		}));
 	})();
 
@@ -64,7 +61,7 @@
 					{#each rows as r (r.username)}
 						<tr>
 							<td>u/{r.username}</td>
-							<td>{r.online ? "syncing" : "not syncing"}</td>
+							<td>{r.syncing ? "Syncing" : "Not Syncing"}</td>
 							<td>{r.when}</td>
 						</tr>
 					{/each}

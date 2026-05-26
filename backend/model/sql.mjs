@@ -240,6 +240,23 @@ async function get_all_non_purged_users() {
 	return rows;
 }
 
+async function get_all_users() {
+	const rows = await query(`
+		select
+			username,
+			last_updated_epoch,
+			(reddit_api_refresh_token_encrypted is not null) as has_token
+		from
+			user_
+		order by
+			(reddit_api_refresh_token_encrypted is not null) desc,
+			last_updated_epoch desc nulls last,
+			username asc
+		;
+	`);
+	return rows;
+}
+
 async function insert_data(username, data) {
 	if (Object.keys(data.items).length == 0) {
 		return;
@@ -648,6 +665,7 @@ export {
 	get_user,
 	purge_user,
 	get_all_non_purged_users,
+	get_all_users,
 	insert_data,
 	get_data,
 	get_placeholder,

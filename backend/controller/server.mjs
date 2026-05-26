@@ -150,12 +150,13 @@ app.get("/callback", (req, res, next) => {
 
 app.get("/get_users", async (req, res) => {
 	try {
-		const rows = await sql.get_all_non_purged_users();
+		const rows = await sql.get_all_users();
 		const users = rows.map(r => ({
 			username: r.username,
-			last_updated_epoch: (r.last_updated_epoch != null ? Number(r.last_updated_epoch) : null)
+			last_updated_epoch: (r.last_updated_epoch != null ? Number(r.last_updated_epoch) : null),
+			has_token: r.has_token
 		}));
-		const usernames = users.map(u => u.username);
+		const usernames = users.filter(u => u.has_token).map(u => u.username);
 		const online_usernames = usernames.filter(u => user.usernames_to_socket_ids[u]);
 		res.send({ usernames, online_usernames, users });
 	} catch (err) {
@@ -166,10 +167,8 @@ app.get("/get_users", async (req, res) => {
 
 app.get("/authentication_check", (req, res) => {
 	if (req.isAuthenticated()) {
-		const was_online = !!user.usernames_to_socket_ids[req.user.username];
 		user.usernames_to_socket_ids[req.user.username] = req.query.socket_id;
 		user.socket_ids_to_usernames[req.query.socket_id] = req.user.username;
-		(!was_online ? io.emit("users updated") : null);
 
 		res.send({
 			username: req.user.username,
@@ -370,7 +369,6 @@ io.on("connect", (socket) => {
 		if (socket.auth_username) { // logged in
 			(socket.auth_username in user.usernames_to_socket_ids ? user.usernames_to_socket_ids[socket.auth_username] = null : null); // set to null; not delete, bc username is needed in user.update_all
 			delete user.socket_ids_to_usernames[socket.id];
-			io.emit("users updated");
 		}
 	});
 });

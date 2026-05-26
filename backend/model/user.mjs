@@ -66,6 +66,7 @@ class User {
 			console.log(`new user (${this.username})`);
 
 			await sql.save_user(this.username, this.reddit_api_refresh_token_encrypted, this.category_sync_info, this.last_active_epoch);
+			broadcast_users_updated();
 		} else {
 			console.log(`returning user (${this.username})`);
 
