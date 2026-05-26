@@ -278,6 +278,8 @@
 						<a bind:this={dl} class="d-none" download></a>
 						<div class="dropdown-divider m-0"></div>
 					{/if}
+					<a href="{globals_r.backend}/download_db">download db</a>
+					<div class="dropdown-divider m-0"></div>
 					<a bind:this={purge_anchor} href="#">purge account</a>
 					<div bind:this={purge_warning} class="bg-danger rounded text-light text-left line_height_1 mb-2 pb-1 d-none">
 						<p class="mx-1">are you sure you want to purge your expanse account?</p>

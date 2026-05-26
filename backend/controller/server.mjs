@@ -207,6 +207,23 @@ app.get("/download", (req, res) => {
 	}
 });
 
+app.get("/download_db", async (req, res) => {
+	if (!req.isAuthenticated()) {
+		res.status(401).sendFile(`${process.env.frontend}/build/index.html`);
+		return;
+	}
+	try {
+		const filename = await file.create_sqlite_export();
+		const filepath = `${process.env.backend}/tempfiles/${filename}.sqlite`;
+		res.download(filepath, "expanse.sqlite", () => {
+			filesystem.promises.unlink(filepath).catch((err) => console.error(err));
+		});
+	} catch (err) {
+		console.error(err);
+		res.status(500).send("error");
+	}
+});
+
 app.get("/logout", (req, res) => {
 	if (req.isAuthenticated()) {
 		req.logout();

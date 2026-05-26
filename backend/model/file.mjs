@@ -1,6 +1,7 @@
 import * as xlsx from "xlsx";
 import filesystem from "fs";
 import child_process from "child_process";
+import better_sqlite3 from "better-sqlite3";
 
 const sql = await import(`${process.env.backend}/model/sql.mjs`);
 const utils = await import(`${process.env.backend}/model/utils.mjs`);
@@ -74,6 +75,83 @@ async function parse_import(username, files) {
 	}
 
 	await sql.parse_import(username, import_data);
+}
+
+async function create_sqlite_export() {
+	const filename = Math.random().toString().slice(2, 17);
+	const filepath = `${process.env.backend}/tempfiles/${filename}.sqlite`;
+
+	const db = better_sqlite3(filepath);
+	try {
+		db.pragma("journal_mode = WAL");
+		db.exec(`
+			create table user_ (
+				username text primary key,
+				reddit_api_refresh_token_encrypted text,
+				category_sync_info text,
+				last_updated_epoch integer,
+				last_active_epoch integer
+			);
+			create table item (
+				id text primary key,
+				type text not null,
+				content text not null,
+				author text not null,
+				sub text not null,
+				url text not null,
+				created_epoch integer not null
+			);
+			create table item_fn_to_import (
+				id text primary key,
+				fn_prefix text not null
+			);
+			create table user_item (
+				username text not null,
+				category text not null,
+				item_id text not null,
+				unique (username, category, item_id)
+			);
+			create table item_sub_icon_url (
+				sub text primary key,
+				url text not null
+			);
+		`);
+
+		const tables = [
+			{ name: "user_", cols: ["username", "reddit_api_refresh_token_encrypted", "category_sync_info", "last_updated_epoch", "last_active_epoch"], int_cols: new Set(["last_updated_epoch", "last_active_epoch"]) },
+			{ name: "item", cols: ["id", "type", "content", "author", "sub", "url", "created_epoch"], int_cols: new Set(["created_epoch"]) },
+			{ name: "item_fn_to_import", cols: ["id", "fn_prefix"], int_cols: new Set() },
+			{ name: "user_item", cols: ["username", "category", "item_id"], int_cols: new Set() },
+			{ name: "item_sub_icon_url", cols: ["sub", "url"], int_cols: new Set() }
+		];
+
+		for (const tbl of tables) {
+			const result = await sql.pool.query(`select ${tbl.cols.join(", ")} from ${tbl.name};`);
+			const placeholders = tbl.cols.map(() => "?").join(", ");
+			const stmt = db.prepare(`insert into ${tbl.name} (${tbl.cols.join(", ")}) values (${placeholders})`);
+			const insert_many = db.transaction((rows) => {
+				for (const row of rows) {
+					const vals = tbl.cols.map((c) => {
+						const v = row[c];
+						if (v === null || v === undefined) return null;
+						if (tbl.int_cols.has(c)) return (typeof v === "string" ? Number(v) : v);
+						if (typeof v === "object") return JSON.stringify(v);
+						return v;
+					});
+					stmt.run(vals);
+				}
+			});
+			insert_many(result.rows);
+		}
+	} finally {
+		db.close();
+	}
+
+	setTimeout(() => {
+		filesystem.promises.unlink(filepath).catch((err) => null);
+	}, 14400000); // 4h
+
+	return filename;
 }
 
 async function create_export(username) {
@@ -156,5 +234,6 @@ export {
 	init,
 	parse_import,
 	create_export,
+	create_sqlite_export,
 	cycle_backup_db
 };
