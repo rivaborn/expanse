@@ -551,6 +551,16 @@ class User {
 			return;
 		}
 
+		// After saved items are durably stored, unsave them from the reddit account (opt-in, throttled).
+		// Non-fatal: a failure here must never abort the update cycle. Runs before the category_sync_info
+		// write below so any latest_fn_mixed reset it makes is persisted by that same update_user call.
+		try {
+			await this.unsave_stored_saved_from_reddit();
+		} catch (err) {
+			console.error(err);
+			logger.error(`user (${this.username}) auto-unsave error (${err})`);
+		}
+
 		await sql.update_user(this.username, {
 			category_sync_info: JSON.stringify(this.category_sync_info),
 			last_updated_epoch: this.last_updated_epoch = utils.now_epoch()
@@ -562,6 +572,55 @@ class User {
 		delete this.new_data;
 		delete this.sub_icon_urls_to_get;
 		delete this.imported_fns_to_delete;
+	}
+	async unsave_stored_saved_from_reddit() {
+		// Unsave a throttled batch of saved items that are stored in expanse but still in the reddit
+		// saved list (both just-synced and historical backlog). Called from update() with this.requester live.
+		if (process.env.AUTO_UNSAVE_SYNCED === "false") {
+			return;
+		}
+
+		const cap = Number.parseInt(process.env.AUTO_UNSAVE_MAX_PER_CYCLE) || 50;
+		const rows = await sql.get_saved_items_to_unsave(this.username, cap);
+		if (rows.length == 0) {
+			return;
+		}
+
+		const unsaved_ids = [];
+		const unsaved_fns = new Set(); // https://www.reddit.com/dev/api/#fullnames
+		let stopped_for_ratelimit = false;
+
+		for (const row of rows) {
+			// Leave headroom (same threshold update_all uses); the rest drains on the next cycle.
+			if (this.requester.ratelimitRemaining != null && this.requester.ratelimitRemaining < 50) {
+				stopped_for_ratelimit = true;
+				break;
+			}
+
+			try {
+				const item = (row.type == "post" ? this.requester.getSubmission(row.item_id) : this.requester.getComment(row.item_id));
+				await item.unsave(); // reddit POST /api/unsave is idempotent (200 even if already unsaved)
+				unsaved_ids.push(row.item_id);
+				unsaved_fns.add(`${row.type == "post" ? "t3" : "t1"}_${row.item_id}`);
+			} catch (err) {
+				console.error(err);
+				logger.error(`user (${this.username}) unsave (${row.item_id}) error (${err})`); // stays un-stamped ➔ retried next cycle
+			}
+		}
+
+		if (unsaved_ids.length > 0) {
+			await sql.mark_items_unsaved_from_reddit(this.username, unsaved_ids);
+
+			// If we just unsaved the item the saved cursor anchors on, that fullname is no longer in the
+			// listing. Reset to null (not replace_latest_fn) so the next cycle re-reads from the top and
+			// never skips an item saved between cycles.
+			if (unsaved_fns.has(this.category_sync_info.saved.latest_fn_mixed)) {
+				this.category_sync_info.saved.latest_fn_mixed = null;
+			}
+		}
+
+		const remaining = rows.length - unsaved_ids.length;
+		console.log(`[unsave] user (${this.username}): unsaved ${unsaved_ids.length}, failed ${remaining}${stopped_for_ratelimit ? " (stopped: ratelimit)" : ""}, batch cap ${cap}`);
 	}
 	_format_item_counts() {
 		const ids = this.new_data?.category_item_ids ?? {};

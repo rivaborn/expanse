@@ -86,6 +86,8 @@ async function init_db() {
 
 		await client.query(`alter table user_item add column if not exists added_epoch bigint;`);
 
+		await client.query(`alter table user_item add column if not exists reddit_unsaved_epoch bigint;`);
+
 		await client.query(`
 			with ordered as (
 				select
@@ -676,6 +678,50 @@ async function get_cached_sub_icons(subs) {
 	return new Set(rows.map((r) => r.sub));
 }
 
+async function get_saved_items_to_unsave(username, limit) { // saved rows stored in expanse but not yet unsaved on reddit; oldest first so the backlog drains front-to-back
+	const rows = await query({
+		text: `
+			select
+				ui.item_id,
+				i.type
+			from
+				user_item ui join item i on i.id = ui.item_id
+			where
+				ui.username = $1
+				and ui.category = 'saved'
+				and ui.reddit_unsaved_epoch is null
+			order by
+				ui.added_epoch asc
+			limit
+				$2
+			;
+		`,
+		values: [username, limit]
+	});
+	return rows;
+}
+
+async function mark_items_unsaved_from_reddit(username, item_ids) { // stamp saved rows we successfully unsaved on reddit so they aren't retried
+	if (item_ids.length == 0) {
+		return;
+	}
+
+	await query({
+		text: `
+			update
+				user_item
+			set
+				reddit_unsaved_epoch = $1
+			where
+				username = $2
+				and category = 'saved'
+				and item_id = ANY($3)
+			;
+		`,
+		values: [Math.floor(Date.now() / 1000), username, item_ids]
+	});
+}
+
 export {
 	pool,
 	init_db,
@@ -694,5 +740,7 @@ export {
 	parse_import,
 	get_fns_to_import,
 	delete_imported_fns,
-	get_cached_sub_icons
+	get_cached_sub_icons,
+	get_saved_items_to_unsave,
+	mark_items_unsaved_from_reddit
 };
