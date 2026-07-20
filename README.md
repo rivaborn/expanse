@@ -6,12 +6,15 @@ the original version is now in maintenance mode and user ChosenOne912 (https://g
 
 note - this app requires a reddit api key to download new data and reddit has a new process for giving out api keys. it was previously given out to anyone who wanted one but now you have to apply and are put on a waiting list.
 
+note on reddit's 1000 limit - reddit's saved list is an effective rolling ~1000-item retention cap, not just a listing limit: once you save past ~1000, reddit silently unsaves the oldest items, so older saves do NOT reappear when you remove newer ones. that is exactly why expanse exists - it captures items into its own db before reddit evicts them. the auto-unsave feature keeps the live saved list clear; the archived copy in expanse is unaffected.
+
 - features::
 	- new items auto-sync
 	- synced items not affected by Reddit deletion
 	- search for items
 	- filter by subreddit
 	- unsave/delete/unvote/unhide items from Reddit directly on expanse
+	- auto-unsave: after a saved item is stored, unsave it from Reddit automatically (opt-in via `AUTO_UNSAVE_SYNCED`, throttled by `AUTO_UNSAVE_MAX_PER_CYCLE`) so the live saved list stays clear while expanse keeps the copy
 	- import csv data from [Reddit data request](https://www.reddit.com/settings/data-request)
 	- export data as json
 	- browse any user's stored data without logging in (write operations require authentication)
