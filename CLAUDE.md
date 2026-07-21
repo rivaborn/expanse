@@ -21,11 +21,11 @@
 
 ## Auto-unsave feature (saved category)
 - **Two distinct processes**, both in `user.mjs`, called from `update()` **after** `insert_data` and sharing `_unsave_reddit_items()` (idempotent, rate-limit aware, non-fatal, resets the saved cursor if it unsaved the anchor item):
-  - **Process 2 — ongoing** (`unsave_new_saved_from_reddit()`, runs first): unsaves the posts saved *this cycle*, read from the in-memory `this.new_data.category_item_ids["saved"]` set, so new saves clear from Reddit promptly. This is the permanent behavior.
+  - **Process 2 — ongoing** (`unsave_new_saved_from_reddit()`, runs first): unsaves the posts saved *this cycle*, read from the in-memory `this.new_data.category_item_ids["saved"]` set, so new saves clear from Reddit promptly. This is the permanent behavior. When it unsaves ≥1 item and `AUTO_UNSAVE_NTFY_URL` is set, it also posts an ntfy notification (`_notify_ntfy()`, non-fatal, 5s-timeout) titled `[unsave:new] <user>: N unsaved`.
   - **Process 1 — one-time backlog** (`unsave_stored_saved_from_reddit()`, runs second): drains the historical not-yet-unsaved rows oldest-first, capped per cycle. Finite — once the backlog is empty `get_saved_items_to_unsave` returns nothing and it no-ops forever.
   - Process 2 stamps its items before Process 1's "not yet unsaved" query runs, so the two sets are disjoint (no item unsaved twice).
 - State: `user_item.reddit_unsaved_epoch` (nullable; migration in `sql.init_db`) stamps rows already unsaved. Helpers `get_saved_items_to_unsave` / `mark_items_unsaved_from_reddit`.
-- Config (`.env_prod`, via Docker `env_file`): `AUTO_UNSAVE_SYNCED` (default on; `false` disables **both** processes) and `AUTO_UNSAVE_MAX_PER_CYCLE` (caps only the Process 1 backlog batch; Process 2 is naturally small).
+- Config (`.env_prod`, via Docker `env_file`): `AUTO_UNSAVE_SYNCED` (default on; `false` disables **both** processes), `AUTO_UNSAVE_MAX_PER_CYCLE` (caps only the Process 1 backlog batch; Process 2 is naturally small), and `AUTO_UNSAVE_NTFY_URL` (optional full ntfy topic url; when set, Process 2 posts a notification per active cycle — on this deployment it points at the homelab ntfy `http://192.168.1.30:2586/Expanse`).
 - **Reddit's 1000 limit is an effective rolling retention cap, not a listing cap.** Saving past ~1000 silently unsaves the oldest, so there is no intact older tail hiding behind the visible ~1000 (verified empirically 2026-07-20). Consequence: Expanse's saved-record count ≠ Reddit's live saved list — most of the drain's "backlog" is no-op unsaves against items Reddit already evicted (harmless idempotent 200s). Don't assume the drain queue reflects what's actually saved.
 
 ## Debugging & Code Style

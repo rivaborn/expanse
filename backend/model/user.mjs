@@ -617,6 +617,28 @@ class User {
 
 		return { unsaved_ids, stopped_for_ratelimit };
 	}
+	async _notify_ntfy(title, body) {
+		// Optional push notification via ntfy (https://ntfy.sh). Disabled unless AUTO_UNSAVE_NTFY_URL is set
+		// (full topic url, e.g. https://ntfy.sh/mytopic). Non-fatal and time-bounded so a slow or unreachable
+		// ntfy server never stalls or aborts the update cycle.
+		const url = process.env.AUTO_UNSAVE_NTFY_URL;
+		if (!url) {
+			return;
+		}
+
+		try {
+			const controller = new AbortController();
+			const timer = setTimeout(() => controller.abort(), 5000);
+			try {
+				await fetch(url, { method: "POST", headers: { "Title": title }, body, signal: controller.signal });
+			} finally {
+				clearTimeout(timer);
+			}
+		} catch (err) {
+			console.error(err);
+			logger.error(`user (${this.username}) ntfy notify error (${err})`);
+		}
+	}
 	async unsave_new_saved_from_reddit() {
 		// Process 2 (ongoing): unsave the posts saved *this cycle* so new saves clear from reddit promptly,
 		// independent of the backlog drain. The "new this cycle" set only exists in memory here — insert_data
@@ -633,6 +655,17 @@ class User {
 		const rows = [...ids].map((id) => ({ item_id: id, type: this.new_data.items[id].type }));
 		const { unsaved_ids, stopped_for_ratelimit } = await this._unsave_reddit_items(rows);
 		console.log(`[unsave:new] user (${this.username}): unsaved ${unsaved_ids.length}/${rows.length}${stopped_for_ratelimit ? " (stopped: ratelimit)" : ""}`);
+
+		// Notify only when process 2 actually unsaved something, so quiet cycles stay silent.
+		if (unsaved_ids.length > 0) {
+			const shown = unsaved_ids.slice(0, 20).join(", ");
+			const more = unsaved_ids.length > 20 ? ` (+${unsaved_ids.length - 20} more)` : "";
+			await this._notify_ntfy(
+				`[unsave:new] ${this.username}: ${unsaved_ids.length} unsaved`,
+				`unsaved ${unsaved_ids.length}/${rows.length} newly-saved item(s) from reddit`
+					+ `${stopped_for_ratelimit ? " (stopped: ratelimit)" : ""}\nids: ${shown}${more}`
+			);
+		}
 	}
 	async unsave_stored_saved_from_reddit() {
 		// Process 1 (one-time backlog): drain a throttled, oldest-first batch of saved rows stored in expanse
