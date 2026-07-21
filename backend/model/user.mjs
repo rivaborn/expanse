@@ -552,10 +552,15 @@ class User {
 		}
 
 		// After saved items are durably stored, unsave them from the reddit account (opt-in, throttled).
-		// Non-fatal: a failure here must never abort the update cycle. Runs before the category_sync_info
-		// write below so any latest_fn_mixed reset it makes is persisted by that same update_user call.
+		// Two distinct processes (see each method): process 2 unsaves the posts saved *this cycle* so new
+		// saves clear promptly; process 1 drains the historical backlog oldest-first until it is empty.
+		// Process 2 runs first so it stamps this cycle's items before process 1's "not yet unsaved" query
+		// runs (no item is unsaved twice). Non-fatal: a failure here must never abort the update cycle.
+		// Runs before the category_sync_info write below so any latest_fn_mixed reset is persisted by that
+		// same update_user call.
 		try {
-			await this.unsave_stored_saved_from_reddit();
+			await this.unsave_new_saved_from_reddit();    // process 2: this cycle's new saves
+			await this.unsave_stored_saved_from_reddit(); // process 1: one-time historical backlog
 		} catch (err) {
 			console.error(err);
 			logger.error(`user (${this.username}) auto-unsave error (${err})`);
@@ -573,19 +578,10 @@ class User {
 		delete this.sub_icon_urls_to_get;
 		delete this.imported_fns_to_delete;
 	}
-	async unsave_stored_saved_from_reddit() {
-		// Unsave a throttled batch of saved items that are stored in expanse but still in the reddit
-		// saved list (both just-synced and historical backlog). Called from update() with this.requester live.
-		if (process.env.AUTO_UNSAVE_SYNCED === "false") {
-			return;
-		}
-
-		const cap = Number.parseInt(process.env.AUTO_UNSAVE_MAX_PER_CYCLE) || 50;
-		const rows = await sql.get_saved_items_to_unsave(this.username, cap);
-		if (rows.length == 0) {
-			return;
-		}
-
+	async _unsave_reddit_items(rows) {
+		// Shared unsave loop for both auto-unsave processes. rows: [{ item_id, type }] (type "post"|"comment").
+		// Idempotent + rate-limit aware. Stamps successes and resets the saved cursor if it anchored on an
+		// item we just removed. Called from update() with this.requester live.
 		const unsaved_ids = [];
 		const unsaved_fns = new Set(); // https://www.reddit.com/dev/api/#fullnames
 		let stopped_for_ratelimit = false;
@@ -619,8 +615,42 @@ class User {
 			}
 		}
 
+		return { unsaved_ids, stopped_for_ratelimit };
+	}
+	async unsave_new_saved_from_reddit() {
+		// Process 2 (ongoing): unsave the posts saved *this cycle* so new saves clear from reddit promptly,
+		// independent of the backlog drain. The "new this cycle" set only exists in memory here — insert_data
+		// gives no per-row new/old signal — so we read it off this.new_data (populated by parse_listing).
+		if (process.env.AUTO_UNSAVE_SYNCED === "false") {
+			return;
+		}
+
+		const ids = this.new_data?.category_item_ids?.saved;
+		if (!ids || ids.size === 0) {
+			return;
+		}
+
+		const rows = [...ids].map((id) => ({ item_id: id, type: this.new_data.items[id].type }));
+		const { unsaved_ids, stopped_for_ratelimit } = await this._unsave_reddit_items(rows);
+		console.log(`[unsave:new] user (${this.username}): unsaved ${unsaved_ids.length}/${rows.length}${stopped_for_ratelimit ? " (stopped: ratelimit)" : ""}`);
+	}
+	async unsave_stored_saved_from_reddit() {
+		// Process 1 (one-time backlog): drain a throttled, oldest-first batch of saved rows stored in expanse
+		// but not yet unsaved on reddit. Finite — once the backlog is exhausted get_saved_items_to_unsave
+		// returns nothing and this no-ops forever. Process 2 handles anything saved from now on.
+		if (process.env.AUTO_UNSAVE_SYNCED === "false") {
+			return;
+		}
+
+		const cap = Number.parseInt(process.env.AUTO_UNSAVE_MAX_PER_CYCLE) || 50;
+		const rows = await sql.get_saved_items_to_unsave(this.username, cap);
+		if (rows.length == 0) {
+			return;
+		}
+
+		const { unsaved_ids, stopped_for_ratelimit } = await this._unsave_reddit_items(rows);
 		const remaining = rows.length - unsaved_ids.length;
-		console.log(`[unsave] user (${this.username}): unsaved ${unsaved_ids.length}, failed ${remaining}${stopped_for_ratelimit ? " (stopped: ratelimit)" : ""}, batch cap ${cap}`);
+		console.log(`[unsave:backlog] user (${this.username}): unsaved ${unsaved_ids.length}, failed ${remaining}${stopped_for_ratelimit ? " (stopped: ratelimit)" : ""}, batch cap ${cap}`);
 	}
 	_format_item_counts() {
 		const ids = this.new_data?.category_item_ids ?? {};

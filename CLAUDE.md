@@ -20,12 +20,15 @@
 - Sync driver: `backend/model/user.mjs` `User.update()` runs per user each cycle (`cycle_update_all`) — syncs each category from Reddit, then `sql.insert_data`. `sql.mjs` is the only DB layer; `insert_data` is idempotent (`on conflict do nothing`).
 
 ## Auto-unsave feature (saved category)
-- After a saved item is durably stored, `User.unsave_stored_saved_from_reddit()` (in `user.mjs`, called from `update()` **after** `insert_data`) unsaves a throttled batch of not-yet-unsaved saved rows from Reddit via the `snoowrap` requester. Idempotent, rate-limit aware, non-fatal.
+- **Two distinct processes**, both in `user.mjs`, called from `update()` **after** `insert_data` and sharing `_unsave_reddit_items()` (idempotent, rate-limit aware, non-fatal, resets the saved cursor if it unsaved the anchor item):
+  - **Process 2 — ongoing** (`unsave_new_saved_from_reddit()`, runs first): unsaves the posts saved *this cycle*, read from the in-memory `this.new_data.category_item_ids["saved"]` set, so new saves clear from Reddit promptly. This is the permanent behavior.
+  - **Process 1 — one-time backlog** (`unsave_stored_saved_from_reddit()`, runs second): drains the historical not-yet-unsaved rows oldest-first, capped per cycle. Finite — once the backlog is empty `get_saved_items_to_unsave` returns nothing and it no-ops forever.
+  - Process 2 stamps its items before Process 1's "not yet unsaved" query runs, so the two sets are disjoint (no item unsaved twice).
 - State: `user_item.reddit_unsaved_epoch` (nullable; migration in `sql.init_db`) stamps rows already unsaved. Helpers `get_saved_items_to_unsave` / `mark_items_unsaved_from_reddit`.
-- Config (`.env_prod`, via Docker `env_file`): `AUTO_UNSAVE_SYNCED` (default on; `false` disables) and `AUTO_UNSAVE_MAX_PER_CYCLE` (batch cap, throttles the backlog drain).
+- Config (`.env_prod`, via Docker `env_file`): `AUTO_UNSAVE_SYNCED` (default on; `false` disables **both** processes) and `AUTO_UNSAVE_MAX_PER_CYCLE` (caps only the Process 1 backlog batch; Process 2 is naturally small).
 - **Reddit's 1000 limit is an effective rolling retention cap, not a listing cap.** Saving past ~1000 silently unsaves the oldest, so there is no intact older tail hiding behind the visible ~1000 (verified empirically 2026-07-20). Consequence: Expanse's saved-record count ≠ Reddit's live saved list — most of the drain's "backlog" is no-op unsaves against items Reddit already evicted (harmless idempotent 200s). Don't assume the drain queue reflects what's actually saved.
 
 ## Debugging & Code Style
-- Use `console.log` for quick backend tracing; check Docker logs (`docker compose -f compose.prod.yaml logs -f app`). Auto-unsave prints `[unsave] user (...)` lines.
+- Use `console.log` for quick backend tracing; check Docker logs (`docker compose -f compose.prod.yaml logs -f app`). Auto-unsave prints `[unsave:new] user (...)` (Process 2) and `[unsave:backlog] user (...)` (Process 1) lines.
 - Follow existing ESLint/Prettier configs.
 - For Reddit API issues, check `backend/model/reddit.mjs` (snoowrap requester) and the per-category logic in `backend/model/user.mjs`.
