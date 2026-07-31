@@ -284,12 +284,22 @@ class User {
 
 		let collected = listing.length;
 		while (!listing.isFinished && collected < MAX_FETCH) {
-			// Leave rate-limit headroom — the same threshold the unsave loop and update_all
-			// already use. The unsave loop had this guard but the LISTING walk did not, so a
-			// walk could spend the last of the budget and surface as snoowrap's RateLimitError,
-			// which aborts the whole user update instead of simply resuming next cycle.
-			if (this.requester.ratelimitRemaining != null && this.requester.ratelimitRemaining < 50) {
-				console.log(`(${this.username}) ${category} walk paused for ratelimit headroom (${this.requester.ratelimitRemaining} left) - resumes next cycle`);
+			// Leave rate-limit headroom. Two reasons, and the size matters:
+			//
+			// 1. Without ANY guard the walk could spend the last of the budget and surface as
+			//    snoowrap's RateLimitError, which aborted the whole user update rather than
+			//    resuming next cycle.
+			// 2. The reserve must be big enough for the UNSAVE loops that run after this, or
+			//    the walk starves the thing the walk exists to feed. Measured on rivaborn:
+			//    the saved walk spent 986 -> 49 requests in 676s, so both unsave processes
+			//    reported "unsaved 0/40 (stopped: ratelimit)" and nothing left reddit. A
+			//    listing we cannot act on is worth less than a shorter listing we can, so
+			//    reserve the backlog batch (AUTO_UNSAVE_MAX_PER_CYCLE) plus the shared floor.
+			const unsave_reserve = (process.env.AUTO_UNSAVE_SYNCED === "false")
+				? 50
+				: 50 + (Number.parseInt(process.env.AUTO_UNSAVE_MAX_PER_CYCLE) || 50);
+			if (this.requester.ratelimitRemaining != null && this.requester.ratelimitRemaining < unsave_reserve) {
+				console.log(`(${this.username}) ${category} walk paused, reserving ${unsave_reserve} requests for unsaving (${this.requester.ratelimitRemaining} left) - resumes next cycle`);
 				break;
 			}
 			const to_fetch = Math.min(PAGE_LIMIT, MAX_FETCH - collected);
