@@ -284,12 +284,39 @@ class User {
 
 		let collected = listing.length;
 		while (!listing.isFinished && collected < MAX_FETCH) {
+			// Leave rate-limit headroom — the same threshold the unsave loop and update_all
+			// already use. The unsave loop had this guard but the LISTING walk did not, so a
+			// walk could spend the last of the budget and surface as snoowrap's RateLimitError,
+			// which aborts the whole user update instead of simply resuming next cycle.
+			if (this.requester.ratelimitRemaining != null && this.requester.ratelimitRemaining < 50) {
+				console.log(`(${this.username}) ${category} walk paused for ratelimit headroom (${this.requester.ratelimitRemaining} left) - resumes next cycle`);
+				break;
+			}
 			const to_fetch = Math.min(PAGE_LIMIT, MAX_FETCH - collected);
 			const prev_len = listing.length;
-			const more = await listing.fetchMore({
-				append: true,
-				amount: to_fetch
-			});
+			let more;
+			try {
+				more = await listing.fetchMore({
+					append: true,
+					amount: to_fetch
+				});
+			} catch (err) {
+				// The `after` anchor no longer exists in the listing — which auto-unsave causes
+				// by design: unsaving an item removes it, and if that item was the pagination
+				// anchor reddit answers 400/403/404 for every later page, forever.
+				//
+				// This must NOT abort the user's whole update. It did: the error escaped
+				// sync_category, so no category was persisted and last_updated_epoch never
+				// advanced — rivaborn stalled for days on the same dead anchor (t3_1v9cpt7,
+				// 12 hits in 72h). Keep what we already collected and let the next cycle
+				// re-read from the top; _unsave_reddit_items' cursor reset makes that safe.
+				if ([400, 403, 404].includes(err.statusCode)) {
+					const anchor = err.options?.qs?.after ?? "?";
+					console.log(`(${this.username}) ${category} pagination anchor gone (${err.statusCode} after=${anchor}) - keeping ${collected} item(s), resuming next cycle`);
+					break;
+				}
+				throw err;
+			}
 			const new_items = more.slice(prev_len);
 			if (new_items.length > 0) {
 				this.parse_listing(new_items, category, type);
