@@ -328,10 +328,23 @@ class User {
 				throw err;
 			}
 			const new_items = more.slice(prev_len);
-			if (new_items.length > 0) {
-				this.parse_listing(new_items, category, type);
-				parsed_any = true;
+			if (new_items.length === 0) {
+				// NO-PROGRESS GUARD. snoowrap can return an empty page while leaving
+				// isFinished false — which happens here routinely, because auto-unsave
+				// deletes the very item the cursor anchors on and reddit then answers that
+				// anchor with nothing. Both loop conditions stay true forever
+				// (`collected` never grows, `isFinished` never flips), so the same URL is
+				// re-issued until the ratelimit stops it.
+				//
+				// Measured before this guard: 726 identical requests in one walk —
+				// user/rivaborn/saved?...&limit=20&after=t3_1v7fo9i, every one the same —
+				// which is where the cycle's whole budget went and why the other nine
+				// accounts were starved (all users share one clientId, so one pool).
+				console.log(`(${this.username}) ${category} walk stopped: page after=${listing[listing.length - 1]?.name ?? "?"} returned no new items (${collected} collected)`);
+				break;
 			}
+			this.parse_listing(new_items, category, type);
+			parsed_any = true;
 			collected = listing.length;
 		}
 
