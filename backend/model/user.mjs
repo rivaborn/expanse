@@ -159,6 +159,68 @@ class User {
 		const latest_fn = (listing.length != 0 ? listing[0].name : null);
 		this.category_sync_info[category][`latest_fn_${type}`] = latest_fn;
 	}
+	async fetch_saved_page({before, after}, limit) {
+		// Manual page fetch for the SAVED listing, mirroring fetch_upvoted_page.
+		//
+		// Why not snoowrap's Listing.fetchMore: it appends `count=9999` to every page
+		// request, and that is the shape reddit answered with 400/403/404 on this account
+		// for days (`/user/x/saved?raw_json=1&count=9999&limit=20&after=t3_...`). Every
+		// such failure observed was on /saved; /upvoted, which already bypasses snoowrap
+		// this way, has never produced one. Dropping `count` is the point of this method.
+		//
+		// Saved is a MIXED listing (posts + comments), so the stubs are named exactly
+		// `Submission` and `Comment`: parse_listing's mixed branch splits on
+		// `item.constructor.name`, and anything else would be silently dropped.
+		const qs = { raw_json: 1, limit };
+		(before ? qs.before = before : null);
+		(after ? qs.after = after : null);
+
+		const res = await this.requester.oauthRequest({
+			uri: `user/${this.username}/saved`,
+			qs
+		});
+
+		if (Array.isArray(res)) {
+			return res;
+		}
+
+		class Submission {
+			constructor(data) { Object.assign(this, data); }
+		}
+		class Comment {
+			constructor(data) { Object.assign(this, data); }
+		}
+
+		const children = res?.data?.children ?? res?.children ?? [];
+		return children.map(({kind, data}) => {
+			switch (kind) {
+				case "t3":
+					return new Submission({
+						id: data.id,
+						name: data.name,
+						title: data.title,
+						body: data.selftext || "",
+						author: { name: data.author },
+						subreddit_name_prefixed: data.subreddit_name_prefixed,
+						permalink: data.permalink,
+						created_utc: data.created_utc
+					});
+				case "t1":
+					return new Comment({
+						id: data.id,
+						name: data.name,
+						body: data.body,
+						title: data.link_title || "",
+						author: { name: data.author },
+						subreddit_name_prefixed: data.subreddit_name_prefixed,
+						permalink: data.permalink,
+						created_utc: data.created_utc
+					});
+				default:
+					return null;
+			}
+		}).filter(Boolean);
+	}
 	async fetch_upvoted_page({before, after}, limit) {
 		// Manual page fetch to avoid snoowrap adding huge count values that trigger upstream 500s.
 		const qs = { raw_json: 1, limit };
@@ -224,6 +286,74 @@ class User {
 		const PAGE_LIMIT = 20;
 		const MAX_FETCH = 100;
 		const UPVOTED_MAX_FETCH = Number.parseInt(process.env.UPVOTED_MAX_FETCH) || 500; // Allow deeper walk for upvoted when needed.
+		// Saved gets its own tunable cap for the same reason upvoted does: it is the queue
+		// that has to keep up with auto-unsave, and reddit's saved listing is a ~1000-item
+		// WINDOW, so draining it surfaces an older tranche the next sync re-discovers.
+		// Ramp this deliberately (100 -> 250 -> 500) watching the shared ratelimit floor —
+		// every user shares one clientId, so an over-eager walk starves the other accounts.
+		const SAVED_MAX_FETCH = Number.parseInt(process.env.SAVED_MAX_FETCH) || MAX_FETCH;
+
+		if (category === "saved") {
+			// Manual pagination (see fetch_saved_page) — snoowrap's fetchMore adds
+			// count=9999, which is the shape reddit 400/404'd on for days. The walk is
+			// cursor-driven off the LAST ITEM OF EACH PAGE, so an anchor is always an item
+			// reddit just handed us, not one snoowrap cached.
+			const stop_at_fn = this.category_sync_info[category].latest_fn_mixed;
+			let after = undefined;
+			const new_items = [];
+			let hit_stop = false;
+
+			while (new_items.length < SAVED_MAX_FETCH) {
+				let page;
+				try {
+					page = await this.fetch_saved_page({ before: undefined, after }, PAGE_LIMIT);
+				} catch (err) {
+					// A dead anchor (the item was unsaved/removed) or a 5xx: keep what we
+					// have and let the next cycle re-read from the top. Never fatal — this
+					// used to escape sync_category and abort the whole user update.
+					err.extras = { category, type, after };
+					logger.error(err);
+					console.log(`(${this.username}) saved walk stopped at after=${after ?? "none"} (${err.statusCode ?? err.name}) - keeping ${new_items.length} item(s)`);
+					break;
+				}
+				console.log(`saved page after=${after ?? "none"} len=${page.length}`);
+				if (page.length === 0) {
+					break;   // no-progress guard: an empty page ends the walk, never loops
+				}
+
+				// Stop as soon as we reach the newest item we already have.
+				const stop_idx = (stop_at_fn ? page.findIndex((item) => item.name === stop_at_fn) : -1);
+				new_items.push(...(stop_idx === -1 ? page : page.slice(0, stop_idx)));
+				if (stop_idx !== -1) {
+					hit_stop = true;
+					break;
+				}
+
+				// Leave headroom for the unsave loops that run after this walk; they are
+				// the point of the cycle, and the walk must not spend their budget.
+				const unsave_reserve = (process.env.AUTO_UNSAVE_SYNCED === "false")
+					? 50
+					: 50 + (Number.parseInt(process.env.AUTO_UNSAVE_MAX_PER_CYCLE) || 50);
+				if (this.requester.ratelimitRemaining != null && this.requester.ratelimitRemaining < unsave_reserve) {
+					console.log(`(${this.username}) saved walk paused, reserving ${unsave_reserve} requests for unsaving (${this.requester.ratelimitRemaining} left) - resumes next cycle`);
+					break;
+				}
+
+				after = page[page.length - 1].name;
+			}
+
+			if (new_items.length >= SAVED_MAX_FETCH && !hit_stop) {
+				logger.warn(`saved sync hit SAVED_MAX_FETCH (${SAVED_MAX_FETCH}) without reaching stored cursor; more remains for the next cycle`);
+			}
+
+			if (new_items.length > 0) {
+				this.parse_listing(new_items, category, type);
+				this.category_sync_info[category].latest_new_data_epoch = utils.now_epoch();
+			} else {
+				await this.replace_latest_fn(category, type);
+			}
+			return;
+		}
 
 		if (category === "upvoted") {
 			const stop_at_fn = this.category_sync_info[category].latest_fn_posts;
