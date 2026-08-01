@@ -5,3 +5,6 @@ sql.mjs linguist-language=SQL
 
 dockerfile linguist-detectable=true
 dockerfile linguist-language=Dockerfile
+
+# These run under bash on ubuntuservices; a CRLF shebang breaks them.
+*.sh text eol=lf

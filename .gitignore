@@ -14,3 +14,7 @@ build/
 !.*ignore
 !.*rc
 !.env_example
+
+# cron job logs + one-off rollbacks beside the scripts
+scripts/*.log
+*.bak.*
